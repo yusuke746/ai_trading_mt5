@@ -17,7 +17,7 @@ MT5_SERVER = os.getenv("MT5_SERVER", "XMTrading-MT5")
 # ──────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-OPENAI_FINAL_APPROVAL_MODEL = os.getenv("OPENAI_FINAL_APPROVAL_MODEL", "gpt-5.2")
+OPENAI_FINAL_APPROVAL_MODEL = os.getenv("OPENAI_FINAL_APPROVAL_MODEL", "gpt-5.4")
 OPENAI_FINAL_APPROVAL_ENABLED = os.getenv("OPENAI_FINAL_APPROVAL_ENABLED", "true").lower() == "true"
 OPENAI_FINAL_APPROVAL_REASONING_EFFORT = os.getenv("OPENAI_FINAL_APPROVAL_REASONING_EFFORT", "medium")
 
