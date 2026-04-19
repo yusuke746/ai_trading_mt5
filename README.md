@@ -16,7 +16,8 @@ MT5 (XMTrading) 向けの AI 自動売買システムです。
 - ゴールド対応の厳密ロット計算（contract size 動的取得）
 - 2段判定（一次 + 最終承認モデル）
 - 機械式緊急エグジット
-- 利益保護（建値移動・利益ロック・ATRトレール）
+- 利益保護（建値移動・利益ロック）
+- 市場クローズ中のAI判定スキップ
 - SQLite 自動メンテナンス
 
 ## セットアップ
@@ -42,6 +43,7 @@ python main.py
 - `RISK_PER_TRADE`
 - `MAX_LOT`
 - `EXIT_MONITOR_TF`
+- `MARKET_DATA_STALE_SEC`
 - `EMERGENCY_EXIT_*`
 - `PROFIT_PROTECTION_*`
 

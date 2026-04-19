@@ -146,6 +146,36 @@ def get_current_price(symbol: str) -> dict | None:
     return {"bid": tick.bid, "ask": tick.ask, "time": tick.time}
 
 
+def is_symbol_market_active(symbol: str, stale_seconds: int | None = None) -> bool:
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        logger.warning("市場状態確認失敗: symbol_infoなし %s", symbol)
+        return False
+
+    if not info.visible:
+        mt5.symbol_select(symbol, True)
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        logger.info("[Market] %s: tick取得不可 → クローズ扱い", symbol)
+        return False
+
+    max_age = stale_seconds if stale_seconds is not None else config.MARKET_DATA_STALE_SEC
+    tick_age = time.time() - tick.time
+    if tick_age > max_age:
+        logger.info(
+            "[Market] %s: tickが古いためクローズ扱い age=%.0fs threshold=%ss",
+            symbol, tick_age, max_age,
+        )
+        return False
+
+    if tick.bid <= 0 and tick.ask <= 0:
+        logger.info("[Market] %s: bid/ask不正のためクローズ扱い", symbol)
+        return False
+
+    return True
+
+
 # ── テクニカル指標 ──────────────────────
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:

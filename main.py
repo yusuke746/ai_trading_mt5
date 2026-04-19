@@ -138,6 +138,10 @@ def _check_entry(symbol: str):
         logger.info("[Entry] %s: ポジション保有中 → スキップ", symbol)
         return
 
+    if not mt5_connector.is_symbol_market_active(symbol):
+        logger.info("[Entry] %s: 市場クローズ/気配停止中 → AI判定スキップ", symbol)
+        return
+
     # 相関リスクチェック
     can_open, reason = risk_manager.can_open_position(symbol)
     if not can_open:
@@ -309,6 +313,10 @@ def _check_single_exit(pos: dict):
         _execute_exit(pos, emergency_reason, action_type="EXIT_EMERGENCY")
         return
 
+    if not mt5_connector.is_symbol_market_active(symbol):
+        logger.info("[Exit] %s ticket=%s: 市場クローズ/気配停止中 → AI判定スキップ", symbol, ticket)
+        return
+
     # 保有中の監視足は設定で切り替え可能
     exit_img = chart_capture.generate_chart(symbol, config.EXIT_MONITOR_TF)
     if exit_img is None:
@@ -387,24 +395,13 @@ def _manage_profit_protection(pos: dict):
     candidate_sl = None
     reason = ""
 
-    if r_multiple >= config.TRAILING_START_R:
-        df = mt5_connector.get_rates(symbol, config.EXIT_MONITOR_TF, config.CHART_BARS + 40)
-        if df is not None and len(df) >= config.ATR_PERIOD + 5:
-            atr = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
-            if atr > 0:
-                if pos["type"] == "BUY":
-                    candidate_sl = current_price - atr * config.TRAILING_ATR_MULTIPLIER
-                else:
-                    candidate_sl = current_price + atr * config.TRAILING_ATR_MULTIPLIER
-                reason = f"trailing at {r_multiple:.2f}R"
-
-    if candidate_sl is None and r_multiple >= config.LOCK_PROFIT_2_TRIGGER_R:
+    if r_multiple >= config.LOCK_PROFIT_2_TRIGGER_R:
         candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_2_R)
         reason = f"lock profit {config.LOCK_PROFIT_2_R:.2f}R"
-    elif candidate_sl is None and r_multiple >= config.LOCK_PROFIT_1_TRIGGER_R:
+    elif r_multiple >= config.LOCK_PROFIT_1_TRIGGER_R:
         candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_1_R)
         reason = f"lock profit {config.LOCK_PROFIT_1_R:.2f}R"
-    elif candidate_sl is None and r_multiple >= config.BREAKEVEN_R:
+    elif r_multiple >= config.BREAKEVEN_R:
         candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.BREAKEVEN_BUFFER_R)
         reason = f"breakeven+{config.BREAKEVEN_BUFFER_R:.2f}R"
 

@@ -100,9 +100,10 @@ BREAKEVEN_BUFFER_R = float(os.getenv("BREAKEVEN_BUFFER_R", "0.10"))
 LOCK_PROFIT_1_TRIGGER_R = float(os.getenv("LOCK_PROFIT_1_TRIGGER_R", "1.5"))
 LOCK_PROFIT_1_R = float(os.getenv("LOCK_PROFIT_1_R", "0.50"))
 LOCK_PROFIT_2_TRIGGER_R = float(os.getenv("LOCK_PROFIT_2_TRIGGER_R", "2.0"))
+
+# 市場クローズ時の無駄なAI判定を防ぐため、ティックが古い銘柄は停止中とみなす
+MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))
 LOCK_PROFIT_2_R = float(os.getenv("LOCK_PROFIT_2_R", "1.00"))
-TRAILING_START_R = float(os.getenv("TRAILING_START_R", "3.0"))
-TRAILING_ATR_MULTIPLIER = float(os.getenv("TRAILING_ATR_MULTIPLIER", "1.2"))
 
 # ──────────────────────────────────────
 # チャート画像設定
