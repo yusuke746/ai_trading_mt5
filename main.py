@@ -46,6 +46,7 @@ def main():
 
     # DB 初期化
     trade_logger.init_db()
+    _run_db_maintenance(full_vacuum=False)
 
     # MT5 接続
     if not mt5_connector.initialize():
@@ -132,14 +133,15 @@ def _mechanical_smc_gate(
     atr_h1: float,
     smc_data: dict,
     current_price: float,
-) -> tuple[bool, bool, bool, str]:
+) -> tuple[bool, bool, bool, str, str]:
     """H1データのみでSMC条件を数値判定する機械ゲート。AI呼び出し前のコスト削減フィルタ。
 
-    Returns: (sweep_pass, bos_pass, rr_pass, sweep_type)
+        Returns: (sweep_pass, bos_pass, rr_pass, sweep_type, entry_type)
       sweep_type: "HIGH" / "LOW" / "NONE"
+            entry_type: "REVERSAL_SWEEP" / "CONTINUATION_BOS" / "NONE"
     """
     if not smc_data or atr_h1 <= 0:
-        return False, False, False, "NONE"
+                return False, False, False, "NONE", "NONE"
 
     # キーレベル収集 (PDH/PDL/PWH/PWL + H1スウィング高安値)
     levels: list[float] = []
@@ -153,7 +155,7 @@ def _mechanical_smc_gate(
         levels.append(float(v))
 
     if not levels:
-        return False, False, False, "NONE"
+        return False, False, False, "NONE", "NONE"
 
     min_penetration = atr_h1 * config.SMC_SWEEP_ATR_MULT
     lookback = min(config.SMC_SWEEP_LOOKBACK_BARS, len(df_h1) - 1)
@@ -448,6 +450,7 @@ def _check_entry(symbol: str):
         ai_smc_ob=signal.smc_ob_confirmed,
         ai_smc_fvg=signal.smc_fvg_present,
         entry_type=mech_entry_type,
+        market_regime=signal.h1_trend,
     )
 
     # Discord通知
@@ -783,17 +786,36 @@ def _run_db_maintenance(full_vacuum: bool):
     try:
         stats = trade_logger.run_maintenance(full_vacuum=full_vacuum)
         logger.info(
-            "[DB] maintenance done: ai=%d hb=%d closed=%d size=%.2fMB->%.2fMB vacuum=%s",
+            "[DB] maintenance done: ai=%d hb=%d closed=%d trim_ai=%d trim_hb=%d size=%.2fMB->%.2fMB vacuum=%s",
             stats["deleted_ai_logs"],
             stats["deleted_heartbeats"],
             stats["deleted_closed_trades"],
+            stats["trimmed_ai_logs"],
+            stats["trimmed_heartbeats"],
             stats["db_size_mb_before"],
             stats["db_size_mb_after"],
             stats["vacuum_executed"],
         )
+        _refresh_regime_dashboard()
     except Exception as e:
         logger.error("[DB] maintenance failed: %s", e, exc_info=True)
         discord_notifier.send_error("SQLiteメンテ失敗", str(e))
+
+
+def _refresh_regime_dashboard():
+    """レジーム別期待値ダッシュボードを定期生成する。"""
+    if not config.DASHBOARD_ENABLED:
+        return
+    try:
+        dashboard = trade_logger.build_regime_dashboard()
+        logger.info(
+            "[Dashboard] generated: lookback=%d days output=%s trades=%s",
+            dashboard["lookback_days"],
+            dashboard["output_path"],
+            dashboard.get("overview", {}).get("trades"),
+        )
+    except Exception as e:
+        logger.error("[Dashboard] generation failed: %s", e, exc_info=True)
 
 
 # ── エントリポイント ────────────────────

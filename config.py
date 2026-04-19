@@ -153,6 +153,14 @@ DB_FULL_VACUUM_INTERVAL_SEC = int(os.getenv("DB_FULL_VACUUM_INTERVAL_SEC", "8640
 DB_RETENTION_DAYS_AI_LOGS = int(os.getenv("DB_RETENTION_DAYS_AI_LOGS", "14"))
 DB_RETENTION_DAYS_HEARTBEATS = int(os.getenv("DB_RETENTION_DAYS_HEARTBEATS", "30"))
 DB_RETENTION_DAYS_CLOSED_TRADES = int(os.getenv("DB_RETENTION_DAYS_CLOSED_TRADES", "365"))
+DB_MAX_AI_LOG_ROWS = int(os.getenv("DB_MAX_AI_LOG_ROWS", "5000"))
+DB_MAX_HEARTBEAT_ROWS = int(os.getenv("DB_MAX_HEARTBEAT_ROWS", "2000"))
+
+# ──────────────────────────────────────
+# Expectancy Dashboard
+# ──────────────────────────────────────
+DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").lower() == "true"
+DASHBOARD_LOOKBACK_DAYS = int(os.getenv("DASHBOARD_LOOKBACK_DAYS", "90"))
 
 # ──────────────────────────────────────
 # パス
@@ -161,7 +169,9 @@ BASE_DIR = _CURRENT_DIR
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 DB_PATH = os.path.join(BASE_DIR, "trades.db")
 SCREENSHOT_DIR = os.path.join(BASE_DIR, "screenshots")
+ANALYTICS_DIR = os.path.join(BASE_DIR, "analytics")
 
 # ディレクトリ作成
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+os.makedirs(ANALYTICS_DIR, exist_ok=True)
