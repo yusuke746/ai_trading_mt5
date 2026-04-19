@@ -92,5 +92,15 @@ def send_error(title: str, detail: str):
     _send("", embeds=[embed])
 
 
-def send_skip(symbol: str, reason: str):
+def send_skip(symbol: str, reason: str, notify: bool = False):
     logger.info("SKIP %s: %s", symbol, reason)
+    if not notify:
+        return
+
+    embed = {
+        "title": f"⏭️ Skip: {symbol}",
+        "color": 0xF1C40F,
+        "description": reason[:1000],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _send("", embeds=[embed])

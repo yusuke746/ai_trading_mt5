@@ -274,7 +274,7 @@ def get_positions(symbol: str | None = None) -> list[dict]:
             "sl": p.sl,
             "tp": p.tp,
             "profit": p.profit,
-            "time": datetime.fromtimestamp(p.time),
+            "time": datetime.utcfromtimestamp(p.time),
         })
     return result
 
@@ -282,6 +282,24 @@ def get_positions(symbol: str | None = None) -> list[dict]:
 def get_all_open_symbols() -> list[str]:
     positions = get_positions()
     return list({p["symbol"] for p in positions})
+
+
+def _send_order_with_filling_fallback(request: dict, symbol: str, context: str):
+    """IOCで失敗した場合にRETURNで再送する。"""
+    result = mt5.order_send(request)
+    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+        return result
+
+    # 一部ブローカー/銘柄では RETURN を要求するためフォールバック
+    retry = dict(request)
+    retry["type_filling"] = mt5.ORDER_FILLING_RETURN
+    retry_result = mt5.order_send(retry)
+    if retry_result is not None and retry_result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info("%s: IOC失敗のためRETURNで再送成功: %s", context, symbol)
+        return retry_result
+
+    # 失敗時は最後の結果を返す（Noneでなければ情報が多い方）
+    return retry_result if retry_result is not None else result
 
 
 # ── 注文執行 ────────────────────────────
@@ -312,7 +330,7 @@ def place_order(symbol: str, direction: str, lot: float,
     if tp is not None:
         request["tp"] = tp
 
-    result = mt5.order_send(request)
+    result = _send_order_with_filling_fallback(request, symbol, "新規注文")
     if result is None:
         logger.error("注文送信失敗: result=None")
         return None
@@ -359,7 +377,7 @@ def close_position(ticket: int) -> bool:
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
-    result = mt5.order_send(request)
+    result = _send_order_with_filling_fallback(request, pos.symbol, "決済注文")
     if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
         err = result.comment if result else "None"
         logger.error("決済失敗: ticket=%s err=%s", ticket, err)

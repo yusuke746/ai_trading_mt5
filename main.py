@@ -257,7 +257,7 @@ def _check_entry(symbol: str):
     can_open, reason = risk_manager.can_open_position(symbol)
     if not can_open:
         logger.info("[Entry] %s: 相関リスク超過 → スキップ (%s)", symbol, reason)
-        discord_notifier.send_skip(symbol, reason)
+        discord_notifier.send_skip(symbol, reason, notify=True)
         return
 
     # レートデータ取得
@@ -415,10 +415,13 @@ def _check_entry(symbol: str):
     sym_info = mt5_connector.get_symbol_info(symbol)
     digits = sym_info["digits"] if sym_info else 5
 
-    if direction == "BUY":
-        sl_price = round(entry_price - sl_distance, digits)
-    else:
-        sl_price = round(entry_price + sl_distance, digits)
+    sl_price = lot_calculator.calculate_sl_price(
+        symbol=symbol,
+        direction=direction,
+        entry_price=entry_price,
+        atr=sl_distance,
+        multiplier=1.0,
+    )
 
     tp_distance = signal.tp_distance
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
@@ -521,7 +524,7 @@ def _check_single_exit(pos: dict):
         return
 
     # 保有時間計算
-    hold_minutes = int((datetime.now() - pos["time"]).total_seconds() / 60)
+    hold_minutes = int((datetime.utcnow() - pos["time"]).total_seconds() / 60)
 
     # AI 分析
     signal = ai_analyzer.analyze_exit(

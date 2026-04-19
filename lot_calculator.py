@@ -208,11 +208,7 @@ def _check_margin(symbol: str, lot: float, margin_free: float,
     """
     import MetaTrader5 as mt5
 
-    # MT5の margin_check で必要証拠金を事前検証
-    check = mt5.order_check(mt5.symbol_info(symbol))  # 簡易チェック
-    # order_check は TradeRequest が必要なので、概算で判断
-
-    # 安全策: 余剰証拠金の50%を上限とする概算
+    # 安全策: 余剰証拠金の50%を上限とする
     if margin_free <= 0:
         logger.warning("余剰証拠金が0以下 → 最小ロット")
         return sym_info["volume_min"]
@@ -220,22 +216,27 @@ def _check_margin(symbol: str, lot: float, margin_free: float,
     # 段階的縮小: 大きすぎるロットは半分にして再チェック
     max_iterations = 10
     for _ in range(max_iterations):
-        # 1ロットの必要証拠金を概算
-        price = sym_info.get("ask") or sym_info.get("bid", 0)
-        contract_size = sym_info["trade_contract_size"]
-
-        # マージン率は通常1/100 (レバレッジ100倍) ～ 1/1000
-        # XMTrading のレバレッジが高いため、正確な値はMT5に依存
-        # 安全のため、余剰証拠金の50%を超えるロットは制限
-        estimated_margin = price * contract_size * lot * 0.01  # レバ100倍仮定
-        # JPY建て口座の場合、USDベースのマージンを換算
-        profit_ccy = sym_info["currency_profit"]
-        if profit_ccy != "JPY":
-            rate = mt5_connector.get_conversion_rate_to_jpy(profit_ccy)
-            estimated_margin *= rate
+        ask = sym_info.get("ask") or 0.0
+        bid = sym_info.get("bid") or 0.0
+        price = ask if ask > 0 else bid
+        if price <= 0:
+            logger.warning("%s: 価格取得失敗のため最小ロットへフォールバック", symbol)
+            return sym_info["volume_min"]
+        else:
+            margin_buy = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol, lot, price)
+            margin_sell = mt5.order_calc_margin(mt5.ORDER_TYPE_SELL, symbol, lot, price)
+            # BUY/SELLのうち大きい方を採用して保守的に判定
+            candidates = [m for m in (margin_buy, margin_sell) if m is not None and m > 0]
+            if candidates:
+                estimated_margin = max(candidates)
+            else:
+                contract_size = sym_info["trade_contract_size"]
+                estimated_margin = price * contract_size * lot * 0.01
 
         if estimated_margin < margin_free * 0.5:
             break
         lot = _round_lot(lot * 0.5, sym_info["volume_step"])
+        if lot < sym_info["volume_min"]:
+            return sym_info["volume_min"]
 
     return lot

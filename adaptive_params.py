@@ -102,6 +102,7 @@ def evaluate_and_adapt() -> dict:
 
     # ─── 閾値更新 ────────────────────────────
     changes = []
+    changed = False
     global_thr = int(params.get("global_confidence_threshold", config.ADAPTIVE_CONF_MIN))
 
     for key, bucket in buckets.items():
@@ -147,6 +148,7 @@ def evaluate_and_adapt() -> dict:
             "lookback_days": config.ADAPTIVE_LOOKBACK_DAYS,
             "last_updated": datetime.utcnow().isoformat(),
         }
+        changed = True
         changes.append({
             "bucket": key,
             "old_threshold": current_thr,
@@ -157,7 +159,45 @@ def evaluate_and_adapt() -> dict:
             "total_trades": total,
         })
 
-    if changes:
+    # バケットが未成熟な期間でも全体傾向でグローバル閾値を更新する
+    total_wins = sum(b["wins"] for b in buckets.values())
+    total_losses = sum(b["losses"] for b in buckets.values())
+    total_trades = total_wins + total_losses
+    if total_trades >= config.ADAPTIVE_MIN_SAMPLES:
+        global_win_rate = total_wins / total_trades
+        total_profit = sum(b["total_profit"] for b in buckets.values())
+        global_expectancy = total_profit / total_trades
+
+        if global_win_rate < 0.40:
+            global_raw_delta = config.ADAPTIVE_CONF_STEP
+        elif global_win_rate > 0.65 and global_expectancy > 0:
+            global_raw_delta = -config.ADAPTIVE_CONF_STEP
+        else:
+            global_raw_delta = 0
+
+        if global_raw_delta != 0:
+            global_capped_delta = max(
+                -config.ADAPTIVE_CONF_MAX_WEEKLY_DELTA,
+                min(config.ADAPTIVE_CONF_MAX_WEEKLY_DELTA, global_raw_delta),
+            )
+            new_global_thr = max(
+                config.ADAPTIVE_CONF_MIN,
+                min(config.ADAPTIVE_CONF_MAX, global_thr + global_capped_delta),
+            )
+            if new_global_thr != global_thr:
+                params["global_confidence_threshold"] = new_global_thr
+                changed = True
+                changes.append({
+                    "bucket": "GLOBAL",
+                    "old_threshold": global_thr,
+                    "new_threshold": new_global_thr,
+                    "delta": new_global_thr - global_thr,
+                    "win_rate": round(global_win_rate, 4),
+                    "expectancy": round(global_expectancy, 2),
+                    "total_trades": total_trades,
+                })
+
+    if changed:
         _save(params)
         logger.info(
             "[Adaptive] %d bucket(s) updated (lookback=%dd): %s",
