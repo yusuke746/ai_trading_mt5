@@ -172,6 +172,9 @@ ADAPTIVE_CONF_STEP           = int(os.getenv("ADAPTIVE_CONF_STEP", "3"))
 ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "60"))
 ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "85"))
 ADAPTIVE_CONF_MAX_WEEKLY_DELTA = int(os.getenv("ADAPTIVE_CONF_MAX_WEEKLY_DELTA", "6"))
+ADAPTIVE_LLM_ENABLED         = os.getenv("ADAPTIVE_LLM_ENABLED", "true").lower() == "true"
+ADAPTIVE_LLM_MODEL           = os.getenv("ADAPTIVE_LLM_MODEL", "gpt-5.4")
+ADAPTIVE_LLM_INTERVAL_SEC    = int(os.getenv("ADAPTIVE_LLM_INTERVAL_SEC", "604800"))
 
 # ──────────────────────────────────────
 # パス
