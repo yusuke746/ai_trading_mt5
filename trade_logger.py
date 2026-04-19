@@ -175,6 +175,25 @@ def update_trade_sl_by_ticket(mt5_ticket: int, sl_price: float):
         )
 
 
+def fetch_recent_closed(lookback_days: int) -> list[dict]:
+    """直近 lookback_days 日の CLOSED トレードを返す (アダプティブ学習用)。"""
+    since = _iso_days_ago(lookback_days)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT market_regime, entry_type, result_profit
+            FROM trades
+            WHERE status = 'CLOSED'
+              AND closed_at IS NOT NULL
+              AND result_profit IS NOT NULL
+              AND datetime(closed_at) >= datetime(?)
+            ORDER BY closed_at
+            """,
+            (since,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── AI logs ─────────────────────────────
 
 def insert_ai_log(symbol: str, action_type: str, ai_response: str,

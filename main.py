@@ -19,6 +19,7 @@ import risk_manager
 import ai_analyzer
 import discord_notifier
 import trade_logger
+import adaptive_params
 
 # ── ログ設定 ────────────────────────────
 
@@ -365,8 +366,12 @@ def _check_entry(symbol: str):
         logger.info("[Entry] %s: H1/M15トレンド不一致 → スキップ", symbol)
         return
 
-    if signal.confidence < 60:
-        logger.info("[Entry] %s: 信頼度不足 %d < 60 → スキップ", symbol, signal.confidence)
+    conf_threshold = adaptive_params.get_confidence_threshold(signal.h1_trend, mech_entry_type)
+    if signal.confidence < conf_threshold:
+        logger.info(
+            "[Entry] %s: 信頼度不足 %d < %d (adaptive) → スキップ",
+            symbol, signal.confidence, conf_threshold,
+        )
         return
 
     # SMCフィルタ: エントリータイプに応じた必須条件チェック
@@ -797,6 +802,7 @@ def _run_db_maintenance(full_vacuum: bool):
             stats["vacuum_executed"],
         )
         _refresh_regime_dashboard()
+        _run_adaptive_eval()
     except Exception as e:
         logger.error("[DB] maintenance failed: %s", e, exc_info=True)
         discord_notifier.send_error("SQLiteメンテ失敗", str(e))
@@ -816,6 +822,25 @@ def _refresh_regime_dashboard():
         )
     except Exception as e:
         logger.error("[Dashboard] generation failed: %s", e, exc_info=True)
+
+
+def _run_adaptive_eval():
+    """アダプティブ評価: 直近トレードから閾値を自動更新する。"""
+    if not config.ADAPTIVE_ENABLED:
+        return
+    try:
+        result = adaptive_params.evaluate_and_adapt()
+        if result.get("skipped"):
+            logger.info("[Adaptive] skipped: %s", result.get("reason"))
+        else:
+            logger.info(
+                "[Adaptive] eval done: trades=%d buckets=%d updated=%d",
+                result["total_trades"],
+                result["buckets_evaluated"],
+                result["buckets_updated"],
+            )
+    except Exception as e:
+        logger.error("[Adaptive] eval failed: %s", e, exc_info=True)
 
 
 # ── エントリポイント ────────────────────

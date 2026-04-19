@@ -163,6 +163,17 @@ DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").lower() == "true"
 DASHBOARD_LOOKBACK_DAYS = int(os.getenv("DASHBOARD_LOOKBACK_DAYS", "90"))
 
 # ──────────────────────────────────────
+# Adaptive Learning (ローリング窓 閾値自動更新)
+# ──────────────────────────────────────
+ADAPTIVE_ENABLED             = os.getenv("ADAPTIVE_ENABLED", "true").lower() == "true"
+ADAPTIVE_LOOKBACK_DAYS       = int(os.getenv("ADAPTIVE_LOOKBACK_DAYS", "7"))
+ADAPTIVE_MIN_SAMPLES         = int(os.getenv("ADAPTIVE_MIN_SAMPLES", "10"))
+ADAPTIVE_CONF_STEP           = int(os.getenv("ADAPTIVE_CONF_STEP", "3"))
+ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "60"))
+ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "85"))
+ADAPTIVE_CONF_MAX_WEEKLY_DELTA = int(os.getenv("ADAPTIVE_CONF_MAX_WEEKLY_DELTA", "6"))
+
+# ──────────────────────────────────────
 # パス
 # ──────────────────────────────────────
 BASE_DIR = _CURRENT_DIR
