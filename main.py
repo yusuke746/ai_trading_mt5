@@ -505,15 +505,6 @@ def _check_single_exit(pos: dict):
 
     _manage_profit_protection(pos)
 
-    emergency_exit, emergency_reason = _should_emergency_exit(pos)
-    if emergency_exit:
-        logger.warning(
-            "[Exit Emergency] %s ticket=%s: %s",
-            symbol, ticket, emergency_reason,
-        )
-        _execute_exit(pos, emergency_reason, action_type="EXIT_EMERGENCY")
-        return
-
     if not mt5_connector.is_symbol_market_active(symbol):
         logger.info("[Exit] %s ticket=%s: 市場クローズ/気配停止中 → AI判定スキップ", symbol, ticket)
         return
@@ -561,20 +552,27 @@ def _check_single_exit(pos: dict):
         _execute_exit(pos, signal.reasoning, action_type="EXIT_PREMISE_BREAK")
         return
 
-    # EXIT判定
-    if signal.decision != "EXIT":
+    # EXIT判定（AI中心）
+    if signal.decision == "EXIT" and signal.confidence >= config.EXIT_MIN_CONFIDENCE:
+        _execute_exit(pos, signal.reasoning, action_type="EXIT_CHECK")
         return
 
-    if signal.confidence < config.EXIT_MIN_CONFIDENCE:
+    if signal.decision == "EXIT" and signal.confidence < config.EXIT_MIN_CONFIDENCE:
         logger.info(
             "[Exit] %s: 信頼度不足 %d < %d → HOLD継続",
             symbol,
             signal.confidence,
             config.EXIT_MIN_CONFIDENCE,
         )
-        return
 
-    _execute_exit(pos, signal.reasoning, action_type="EXIT_CHECK")
+    # AIが撤退しない場合のみ、機械的な緊急撤退をフォールバック適用
+    emergency_exit, emergency_reason = _should_emergency_exit(pos)
+    if emergency_exit:
+        logger.warning(
+            "[Exit Emergency:FALLBACK] %s ticket=%s: %s",
+            symbol, ticket, emergency_reason,
+        )
+        _execute_exit(pos, emergency_reason, action_type="EXIT_EMERGENCY")
 
 
 def _manage_profit_protection(pos: dict):
@@ -688,10 +686,10 @@ def _should_emergency_exit(pos: dict) -> tuple[bool, str]:
             f"M{config.EXIT_MONITOR_TF}構造崩れ + 逆行{adverse_move:.5f} >= ATR{current_atr:.5f} x {adverse_atr_threshold}",
         )
 
-    if structure_break and atr_spike and adverse_move > 0:
+    if structure_break and atr_spike and adverse_move >= current_atr * config.EMERGENCY_EXIT_ATR_SPIKE_MIN_ADVERSE_ATR:
         return (
             True,
-            f"M{config.EXIT_MONITOR_TF}構造崩れ + ATR急拡大 ({current_atr:.5f} >= {baseline_atr:.5f} x {config.EMERGENCY_EXIT_ATR_SPIKE_MULTIPLIER})",
+            f"M{config.EXIT_MONITOR_TF}構造崩れ + ATR急拡大 ({current_atr:.5f} >= {baseline_atr:.5f} x {config.EMERGENCY_EXIT_ATR_SPIKE_MULTIPLIER}) + 逆行{adverse_move:.5f} >= ATR{current_atr:.5f} x {config.EMERGENCY_EXIT_ATR_SPIKE_MIN_ADVERSE_ATR}",
         )
 
     return False, ""

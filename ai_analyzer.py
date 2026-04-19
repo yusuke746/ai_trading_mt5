@@ -192,7 +192,7 @@ def analyze_entry(symbol: str, current_price: float,
     try:
         client = _get_client()
         response = client.responses.create(
-            model=config.OPENAI_MODEL,
+            model=config.OPENAI_ENTRY_MODEL,
             input=[
                 {
                     "role": "user",
@@ -308,7 +308,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     try:
         client = _get_client()
         response = client.responses.create(
-            model=config.OPENAI_MODEL,
+            model=config.OPENAI_EXIT_MODEL,
             input=[
                 {
                     "role": "user",
