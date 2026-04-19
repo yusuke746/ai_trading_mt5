@@ -15,6 +15,9 @@ MT5 (XMTrading) 向けの AI 自動売買システムです。
 - 相関リスク制御（通貨グループ上限）
 - ゴールド対応の厳密ロット計算（contract size 動的取得）
 - 2段判定（一次 + 最終承認モデル）
+- エントリー時TP設定（AI提案 + 最低R倍率ガード）
+- 保有中にエントリー根拠が崩れた場合の強制EXIT
+- 利確優先のポジション管理方針
 - 機械式緊急エグジット
 - 利益保護（建値移動・利益ロック）
 - 市場クローズ中のAI判定スキップ
@@ -43,6 +46,10 @@ python main.py
 - `RISK_PER_TRADE`
 - `MAX_LOT`
 - `EXIT_MONITOR_TF`
+- `EXIT_MIN_CONFIDENCE`
+- `FORCE_EXIT_ON_PREMISE_BREAK`
+- `ENTRY_TP_R`
+- `ENTRY_MIN_TP_R`
 - `MARKET_DATA_STALE_SEC`
 - `EMERGENCY_EXIT_*`
 - `PROFIT_PROTECTION_*`

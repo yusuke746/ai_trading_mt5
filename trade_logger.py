@@ -17,6 +17,26 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_db(conn: sqlite3.Connection):
+    """既存DBに不足カラムを追加するマイグレーション"""
+    cur = conn.execute("PRAGMA table_info(trades)")
+    existing = {row[1] for row in cur.fetchall()}
+    new_cols = [
+        ("exit_reason",    "TEXT"),
+        ("smc_sweep_pass", "INTEGER"),
+        ("smc_bos_pass",   "INTEGER"),
+        ("smc_rr_pass",    "INTEGER"),
+        ("ai_confidence",  "INTEGER"),
+        ("ai_smc_sweep",   "INTEGER"),
+        ("ai_smc_ob",      "INTEGER"),
+        ("ai_smc_fvg",     "INTEGER"),
+        ("entry_type",     "TEXT"),
+    ]
+    for col, typ in new_cols:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
+
+
 def init_db():
     with _get_conn() as conn:
         conn.executescript("""
@@ -36,7 +56,16 @@ def init_db():
                 result_pips     REAL,
                 result_profit   REAL,
                 mt5_ticket      INTEGER,
-                status          TEXT    DEFAULT 'OPEN'
+                status          TEXT    DEFAULT 'OPEN',
+                exit_reason     TEXT,
+                smc_sweep_pass  INTEGER,
+                smc_bos_pass    INTEGER,
+                smc_rr_pass     INTEGER,
+                ai_confidence   INTEGER,
+                ai_smc_sweep    INTEGER,
+                ai_smc_ob       INTEGER,
+                ai_smc_fvg      INTEGER,
+                entry_type      TEXT
             );
 
             CREATE TABLE IF NOT EXISTS ai_logs (
@@ -65,6 +94,8 @@ def init_db():
 
         # WALサイズの無制限増加を防ぐため、定期的に自動チェックポイントを設定
         conn.execute("PRAGMA wal_autocheckpoint=1000")
+        # 既存DBへのマイグレーション
+        _migrate_db(conn)
     logger.info("Database initialized: %s", config.DB_PATH)
 
 
@@ -73,30 +104,44 @@ def init_db():
 def insert_trade(symbol: str, direction: str, entry_price: float,
                  lot_size: float, sl_price: float, tp_price: float | None,
                  ai_reasoning: str, news_summary: str,
-                 mt5_ticket: int) -> int:
+                 mt5_ticket: int,
+                 smc_sweep_pass: bool | None = None,
+                 smc_bos_pass: bool | None = None,
+                 smc_rr_pass: bool | None = None,
+                 ai_confidence: int | None = None,
+                 ai_smc_sweep: bool | None = None,
+                 ai_smc_ob: bool | None = None,
+                 ai_smc_fvg: bool | None = None,
+                 entry_type: str | None = None) -> int:
+    def _b(v): return int(v) if v is not None else None
     with _get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO trades
                (opened_at, symbol, direction, entry_price, lot_size,
-                sl_price, tp_price, ai_reasoning, news_summary, mt5_ticket, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')""",
+                sl_price, tp_price, ai_reasoning, news_summary, mt5_ticket, status,
+                smc_sweep_pass, smc_bos_pass, smc_rr_pass,
+                ai_confidence, ai_smc_sweep, ai_smc_ob, ai_smc_fvg, entry_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (datetime.utcnow().isoformat(), symbol, direction,
              entry_price, lot_size, sl_price, tp_price,
-             ai_reasoning, news_summary, mt5_ticket),
+             ai_reasoning, news_summary, mt5_ticket,
+             _b(smc_sweep_pass), _b(smc_bos_pass), _b(smc_rr_pass),
+             ai_confidence, _b(ai_smc_sweep), _b(ai_smc_ob), _b(ai_smc_fvg), entry_type),
         )
         return cur.lastrowid
 
 
 def close_trade(trade_id: int, exit_price: float,
-                result_pips: float, result_profit: float):
+                result_pips: float, result_profit: float,
+                exit_reason: str | None = None):
     with _get_conn() as conn:
         conn.execute(
             """UPDATE trades
                SET closed_at = ?, exit_price = ?, result_pips = ?,
-                   result_profit = ?, status = 'CLOSED'
+                   result_profit = ?, status = 'CLOSED', exit_reason = ?
                WHERE id = ?""",
             (datetime.utcnow().isoformat(), exit_price,
-             result_pips, result_profit, trade_id),
+             result_pips, result_profit, exit_reason, trade_id),
         )
 
 

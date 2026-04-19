@@ -199,6 +199,58 @@ def calculate_ma(df: pd.DataFrame, period: int = 20) -> pd.Series:
     return df["close"].rolling(window=period).mean()
 
 
+# ── SMC 価格レベル計算 ──────────────────
+
+def get_price_levels(symbol: str, digits: int = 5) -> dict:
+    """SMC分析用の価格レベルを計算して返す。
+
+    Returns:
+        dict with:
+          pdh/pdl  : 前日高値/安値 (D1の1本前確定足)
+          pwh/pwl  : 前週高値/安値 (直近5日足の高安値)
+          swing_highs : H1直近スウィング高値リスト (最大5個)
+          swing_lows  : H1直近スウィング安値リスト (最大5個)
+    """
+    result: dict = {
+        "pdh": None, "pdl": None,
+        "pwh": None, "pwl": None,
+        "swing_highs": [],
+        "swing_lows": [],
+    }
+
+    # PDH / PDL : D1の1本前確定足
+    df_d1 = get_rates(symbol, "D1", 10)
+    if df_d1 is not None and len(df_d1) >= 2:
+        prev = df_d1.iloc[-2]
+        result["pdh"] = round(float(prev["high"]), digits)
+        result["pdl"] = round(float(prev["low"]), digits)
+
+    # PWH / PWL : 直近5本のD1足 (当日除く)
+    if df_d1 is not None and len(df_d1) >= 6:
+        week_slice = df_d1.iloc[-6:-1]
+        result["pwh"] = round(float(week_slice["high"].max()), digits)
+        result["pwl"] = round(float(week_slice["low"].min()), digits)
+
+    # スウィング高値/安値 : H1で±3本窓のピボット検出 (確定足のみ)
+    df_h1 = get_rates(symbol, "H1", 100)
+    if df_h1 is not None and len(df_h1) >= 10:
+        window = 3
+        highs: list[float] = []
+        lows: list[float] = []
+        # 最後の1本は未確定足のため除外
+        for i in range(window, len(df_h1) - window - 1):
+            h = df_h1["high"].iloc[i]
+            lo = df_h1["low"].iloc[i]
+            if h == df_h1["high"].iloc[i - window: i + window + 1].max():
+                highs.append(round(float(h), digits))
+            if lo == df_h1["low"].iloc[i - window: i + window + 1].min():
+                lows.append(round(float(lo), digits))
+        result["swing_highs"] = highs[-5:]
+        result["swing_lows"] = lows[-5:]
+
+    return result
+
+
 # ── ポジション取得 ──────────────────────
 
 def get_positions(symbol: str | None = None) -> list[dict]:

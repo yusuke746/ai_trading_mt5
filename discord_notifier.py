@@ -49,7 +49,7 @@ def send_heartbeat(balance: float, equity: float, open_positions: int):
 
 
 def send_entry(symbol: str, direction: str, lot: float,
-               entry_price: float, sl: float, reasoning: str):
+               entry_price: float, sl: float, tp: float, reasoning: str):
     color = 0x2ECC71 if direction == "BUY" else 0xE74C3C
     embed = {
         "title": f"📈 Entry: {symbol} {direction}",
@@ -58,6 +58,7 @@ def send_entry(symbol: str, direction: str, lot: float,
             {"name": "ロット", "value": f"{lot:.2f}", "inline": True},
             {"name": "エントリー価格", "value": str(entry_price), "inline": True},
             {"name": "SL", "value": str(sl), "inline": True},
+            {"name": "TP", "value": str(tp), "inline": True},
             {"name": "AI判断 (抜粋)", "value": reasoning[:500]},
         ],
         "timestamp": datetime.utcnow().isoformat(),

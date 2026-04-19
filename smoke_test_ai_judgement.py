@@ -70,6 +70,7 @@ def main():
                 "reasoning": signal.reasoning,
                 "news_impact": signal.news_impact,
                 "sl_distance": signal.sl_distance,
+                "tp_distance": signal.tp_distance,
                 "raw_response_preview": signal.raw_response[:500],
             }
         )

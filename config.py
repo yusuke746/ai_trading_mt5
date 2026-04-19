@@ -101,6 +101,32 @@ LOCK_PROFIT_1_TRIGGER_R = float(os.getenv("LOCK_PROFIT_1_TRIGGER_R", "1.5"))
 LOCK_PROFIT_1_R = float(os.getenv("LOCK_PROFIT_1_R", "0.50"))
 LOCK_PROFIT_2_TRIGGER_R = float(os.getenv("LOCK_PROFIT_2_TRIGGER_R", "2.0"))
 
+# 利確優先のTP設定
+ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
+ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
+EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
+FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
+
+# ──────────────────────────────────────
+# SMC (Smart Money Concepts) フィルタ設定
+# ──────────────────────────────────────
+# SMCフィルタを有効にすると、エントリー条件にLiquidity Sweepの確認が追加される
+SMC_FILTER_ENABLED = os.getenv("SMC_FILTER_ENABLED", "true").lower() == "true"
+# Liquidity Sweepと判定するための最小侵食幅 (ATR比率)
+# 例: 0.3 → 高安値をATRの30%以上超えた場合にSweep認定
+SMC_SWEEP_ATR_MULT = float(os.getenv("SMC_SWEEP_ATR_MULT", "0.3"))
+# 機械的SMCゲート: AI呼び出し前に数値条件でフィルタリング
+# Falseにすると機械ゲートをスキップしてAIのみで判断
+SMC_MECHANICAL_GATE_ENABLED = os.getenv("SMC_MECHANICAL_GATE_ENABLED", "true").lower() == "true"
+# Sweepを探す遡り期間 (H1バー数)
+SMC_SWEEP_LOOKBACK_BARS = int(os.getenv("SMC_SWEEP_LOOKBACK_BARS", "10"))
+# 順張り (Continuation BOS) エントリーを有効にする
+SMC_CONTINUATION_ENABLED = os.getenv("SMC_CONTINUATION_ENABLED", "true").lower() == "true"
+# 順張りBOS判定: MAのスロープを見る遡り期間 (H1バー数)
+SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBACK_BARS", "5"))
+# 順張りBOS判定: MA傾きの最小値 (ATR比率) — この値未満のMA傾きはトレンドなしとみなす
+SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.3"))
+
 # 市場クローズ時の無駄なAI判定を防ぐため、ティックが古い銘柄は停止中とみなす
 MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))
 LOCK_PROFIT_2_R = float(os.getenv("LOCK_PROFIT_2_R", "1.00"))
