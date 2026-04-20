@@ -9,6 +9,7 @@
 import sys
 import time
 import logging
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
@@ -36,6 +37,51 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(UTC)
+    return dt.replace(tzinfo=UTC)
+
+
+def _calculate_hold_minutes(pos: dict, trade: dict | None) -> int:
+    """保有時間はDB記録を優先し、異常値は0分に丸める。"""
+    now_utc = datetime.now(UTC)
+
+    opened_at = trade.get("opened_at") if trade else None
+    if opened_at:
+        try:
+            opened_dt = _as_utc(datetime.fromisoformat(opened_at))
+            if opened_dt is not None:
+                hold_minutes = int((now_utc - opened_dt).total_seconds() / 60)
+                if hold_minutes >= 0:
+                    return hold_minutes
+                logger.warning(
+                    "[Exit] %s ticket=%s: DB保有時間が負値 (%d min) のため0に補正",
+                    pos["symbol"], pos["ticket"], hold_minutes,
+                )
+                return 0
+        except ValueError:
+            logger.warning(
+                "[Exit] %s ticket=%s: opened_at解析失敗 (%s)",
+                pos["symbol"], pos["ticket"], opened_at,
+            )
+
+    pos_time = _as_utc(pos.get("time"))
+    if pos_time is None:
+        return 0
+
+    hold_minutes = int((now_utc - pos_time).total_seconds() / 60)
+    if hold_minutes < 0:
+        logger.warning(
+            "[Exit] %s ticket=%s: MT5保有時間が負値 (%d min) のため0に補正",
+            pos["symbol"], pos["ticket"], hold_minutes,
+        )
+        return 0
+    return hold_minutes
 
 
 # ── メインループ ────────────────────────
@@ -268,8 +314,8 @@ def _check_entry(symbol: str):
     last_closed_at = loss_info.get("last_closed_at")
     if streak >= config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER and last_closed_at:
         try:
-            last_dt = datetime.fromisoformat(last_closed_at)
-            elapsed_min = (datetime.utcnow() - last_dt).total_seconds() / 60
+            last_dt = _as_utc(datetime.fromisoformat(last_closed_at))
+            elapsed_min = (datetime.now(UTC) - last_dt).total_seconds() / 60
             if elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
                 logger.warning(
                     "[Entry] %s: 直近%d連敗のためクールダウン中 (%.0f/%.0f min) → スキップ",
@@ -552,7 +598,7 @@ def _check_single_exit(pos: dict):
         return
 
     # 保有時間計算
-    hold_minutes = int((datetime.utcnow() - pos["time"]).total_seconds() / 60)
+    hold_minutes = _calculate_hold_minutes(pos, trade)
 
     # AI 分析
     signal = ai_analyzer.analyze_exit(

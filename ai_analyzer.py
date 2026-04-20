@@ -160,6 +160,14 @@ def analyze_entry(symbol: str, current_price: float,
 4. M15足でエントリータイミングを精査
 5. web検索で{symbol}に関連する直近のニュースや経済イベントを確認
 
+【判定前の自己検証】
+- BUY / SELL を出す前に、以下を1つずつ自己検証してください
+- 機械判定ゲートの False は重いマイナス要素です。特に RR充足=False の場合、十分な伸び代を具体的に説明できないなら SKIP にしてください
+- h1_trend が SIDEWAYS の場合は原則 SKIP にしてください。「横ばいだが少し上/下寄り」のような曖昧な解釈で alignment=true にしないでください
+- alignment=true にするのは、H1とM15が同方向に明確に傾いている場合だけです
+- confidence は厳格に付与してください。70未満は見送り候補、80以上は「かなり明確な優位性」がある場合に限定してください
+- 必須条件や機械判定と矛盾がある場合、reasoning が魅力的でも BUY / SELL を出してはいけません
+
 【売買哲学】
 - 損切り貧乏を避け、利大損小を最優先してください
 - 逆張りエントリーは「Sweepによる流動性回収後の反転局面」に限定し、SLはSweep起点の直外側に置く
@@ -183,6 +191,8 @@ def analyze_entry(symbol: str, current_price: float,
     "tp_distance": TP幅の数値(price単位、SL以上で利確優先)
 }}
 
+重要: 機械判定ゲートで RR充足=False かつ、その弱点を上回る明確な伸び代を説明できない場合は decision を必ず "SKIP" にしてください。
+重要: h1_trend が "SIDEWAYS" の場合は decision を必ず "SKIP" にしてください。
 重要 (逆張りセットアップ): SMCフィルタ有効時は smc_liquidity_sweep が false なら decision を必ず "SKIP" にしてください。
 重要 (順張りセットアップ): smc_ob_confirmed が false の場合は decision を必ず "SKIP" にしてください。
 上位足と下位足のトレンドが一致しない場合も "SKIP" にしてください。
@@ -215,7 +225,10 @@ def analyze_entry(symbol: str, current_price: float,
         raw_text = response.output_text
         logger.info("[AI Entry] %s raw response length: %d", symbol, len(raw_text))
 
-        primary_signal = _parse_entry_response(raw_text, atr_m15)
+        primary_signal = _apply_entry_signal_guards(
+            _parse_entry_response(raw_text, atr_m15),
+            mech_gate=mech_gate,
+        )
 
         if _should_run_final_approval(symbol, primary_signal):
             final_signal = _run_entry_final_approval(
@@ -260,6 +273,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     """保有ポジションのエグジット判断"""
 
     m15_b64 = chart_capture.chart_to_base64(m15_image)
+    safe_hold_minutes = max(0, hold_minutes)
 
     prompt = f"""あなたはSMC(Smart Money Concepts)を熟知したプロのFXトレーダーです。
 現在ポジションを保有しており、チャートを見ながらどう対処すべきか判断してください。
@@ -270,7 +284,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
 - エントリー価格: {entry_price}
 - 現在価格: {current_price}
 - 含み損益: ¥{unrealized_pnl:,.0f}
-- 保有時間: {hold_minutes}分
+- 保有時間: {safe_hold_minutes}分
 - TP価格: {tp_price if tp_price is not None else '未設定'}
 - 現在SL価格: {current_sl if current_sl is not None else '未設定'}
 
@@ -302,7 +316,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
   - エントリー後にポジション方向への力強い動きがあったか、それとも停滞・逆行が続いているか？
 
 ■ 4. 保有時間とノイズの許容
-  - 保有{hold_minutes}分経過: エントリー直後（目安: 30分未満）の小幅な逆行はノイズとして許容する
+    - 保有{safe_hold_minutes}分経過: エントリー直後（目安: 30分未満）の小幅な逆行はノイズとして許容する
   - 長時間保有（目安: 4時間超）でも方向感が出ない場合は、機会コストとしてEXITを検討する
   - SLに設定されている価格（{current_sl if current_sl is not None else '未設定'}）を実際に侵食していない限り、
     含み損だけを理由にした早期EXITは避ける
@@ -402,6 +416,43 @@ def _should_run_final_approval(symbol: str, signal: EntrySignal) -> bool:
     if not signal.alignment:
         return False
     return symbol in config.FINAL_APPROVAL_SYMBOLS or signal.confidence >= config.FINAL_APPROVAL_MIN_CONFIDENCE
+
+
+def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = None) -> EntrySignal:
+    """LLMの矛盾したエントリー判断をSKIPに矯正する。"""
+    if signal.decision not in {"BUY", "SELL"}:
+        return signal
+
+    skip_reasons: list[str] = []
+    entry_type = mech_gate.get("entry_type") if mech_gate else None
+
+    if signal.confidence < 70:
+        skip_reasons.append("confidence_below_70")
+    if signal.h1_trend == "SIDEWAYS":
+        skip_reasons.append("h1_sideways")
+    if not signal.alignment:
+        skip_reasons.append("trend_misalignment")
+    if mech_gate and not mech_gate.get("rr_pass", False):
+        skip_reasons.append("mechanical_rr_failed")
+
+    if entry_type == "REVERSAL_SWEEP" and not signal.smc_liquidity_sweep:
+        skip_reasons.append("reversal_without_sweep")
+    if entry_type == "CONTINUATION_BOS" and not signal.smc_ob_confirmed:
+        skip_reasons.append("continuation_without_ob")
+
+    if not skip_reasons:
+        return signal
+
+    guard_note = "Entry guard forced SKIP: " + ", ".join(skip_reasons)
+    reasoning = signal.reasoning.strip()
+    if reasoning:
+        reasoning = f"{guard_note}. {reasoning}"
+    else:
+        reasoning = guard_note
+
+    signal.decision = "SKIP"
+    signal.reasoning = reasoning
+    return signal
 
 
 def _run_entry_final_approval(symbol: str, current_price: float,
