@@ -130,6 +130,8 @@ SMC_MECHANICAL_GATE_ENABLED = os.getenv("SMC_MECHANICAL_GATE_ENABLED", "true").l
 SMC_SWEEP_LOOKBACK_BARS = int(os.getenv("SMC_SWEEP_LOOKBACK_BARS", "10"))
 # 順張り (Continuation BOS) エントリーを有効にする
 SMC_CONTINUATION_ENABLED = os.getenv("SMC_CONTINUATION_ENABLED", "true").lower() == "true"
+# 逆張り (Reversal Sweep) エントリーを有効にする
+SMC_REVERSAL_ENABLED = os.getenv("SMC_REVERSAL_ENABLED", "false").lower() == "true"
 # 順張りBOS判定: MAのスロープを見る遡り期間 (H1バー数)
 SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBACK_BARS", "5"))
 # 順張りBOS判定: MA傾きの最小値 (ATR比率) — この値未満のMA傾きはトレンドなしとみなす

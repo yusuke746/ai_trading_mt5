@@ -434,9 +434,15 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
         skip_reasons.append("trend_misalignment")
     if mech_gate and not mech_gate.get("rr_pass", False):
         skip_reasons.append("mechanical_rr_failed")
+    if mech_gate and not mech_gate.get("bos_pass", False):
+        skip_reasons.append("mechanical_bos_failed")
+
+    mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
 
     if entry_type == "REVERSAL_SWEEP" and not signal.smc_liquidity_sweep:
         skip_reasons.append("reversal_without_sweep")
+    if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"} and signal.smc_sweep_direction != mech_sweep_type:
+        skip_reasons.append("sweep_direction_mismatch")
     if entry_type == "CONTINUATION_BOS" and not signal.smc_ob_confirmed:
         skip_reasons.append("continuation_without_ob")
 

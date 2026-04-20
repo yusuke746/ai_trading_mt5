@@ -259,7 +259,8 @@ def _mechanical_smc_gate(
             if targets:
                 rr_pass = (min(targets) - current_price) >= min_tp_dist
 
-        return sweep_pass, bos_pass, rr_pass, sweep_type, "REVERSAL_SWEEP"
+        if config.SMC_REVERSAL_ENABLED:
+            return sweep_pass, bos_pass, rr_pass, sweep_type, "REVERSAL_SWEEP"
 
     # ── Continuation BOS gate (順張り: BOS後の押し目/戻し) ─────────
     if config.SMC_CONTINUATION_ENABLED and len(ma_clean) >= config.SMC_CONTINUATION_BOS_LOOKBACK_BARS + 1:
