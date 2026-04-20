@@ -168,6 +168,39 @@ def get_open_trade_by_ticket(mt5_ticket: int) -> dict | None:
         return dict(row) if row else None
 
 
+def get_symbol_recent_loss_streak(symbol: str, lookback: int = 10) -> dict:
+    """銘柄ごとの直近連敗数と最終クローズ時刻を返す。"""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT closed_at, result_profit
+            FROM trades
+            WHERE symbol = ?
+              AND status = 'CLOSED'
+              AND closed_at IS NOT NULL
+              AND result_profit IS NOT NULL
+            ORDER BY datetime(closed_at) DESC
+            LIMIT ?
+            """,
+            (symbol, lookback),
+        ).fetchall()
+
+    streak = 0
+    last_closed_at = None
+    for idx, r in enumerate(rows):
+        if idx == 0:
+            last_closed_at = r["closed_at"]
+        if (r["result_profit"] or 0) < 0:
+            streak += 1
+        else:
+            break
+
+    return {
+        "loss_streak": streak,
+        "last_closed_at": last_closed_at,
+    }
+
+
 def update_trade_sl_by_ticket(mt5_ticket: int, sl_price: float):
     with _get_conn() as conn:
         conn.execute(

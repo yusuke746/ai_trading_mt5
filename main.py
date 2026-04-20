@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 from datetime import datetime
+from datetime import timedelta
 
 import config
 import mt5_connector
@@ -188,7 +189,8 @@ def _mechanical_smc_gate(
     ma = mt5_connector.calculate_ma(df_h1, config.MA_PERIOD)
     ma_clean = ma.dropna()
     sl_dist = atr_h1 * 1.5
-    min_tp_dist = sl_dist * config.ENTRY_MIN_TP_R
+    rr_relax = max(0.5, min(1.0, config.SMC_MECHANICAL_RR_RELAX_FACTOR))
+    min_tp_dist = sl_dist * config.ENTRY_MIN_TP_R * rr_relax
     rr_pass = False
 
     if sweep_pass:
@@ -260,6 +262,26 @@ def _check_entry(symbol: str):
         discord_notifier.send_skip(symbol, reason, notify=True)
         return
 
+    # 連敗銘柄の過剰エントリー抑制（クールダウン）
+    loss_info = trade_logger.get_symbol_recent_loss_streak(symbol)
+    streak = int(loss_info.get("loss_streak", 0))
+    last_closed_at = loss_info.get("last_closed_at")
+    if streak >= config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER and last_closed_at:
+        try:
+            last_dt = datetime.fromisoformat(last_closed_at)
+            elapsed_min = (datetime.utcnow() - last_dt).total_seconds() / 60
+            if elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
+                logger.warning(
+                    "[Entry] %s: 直近%d連敗のためクールダウン中 (%.0f/%.0f min) → スキップ",
+                    symbol,
+                    streak,
+                    elapsed_min,
+                    config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES,
+                )
+                return
+        except ValueError:
+            pass
+
     # レートデータ取得
     df_h1 = mt5_connector.get_rates(symbol, config.TREND_TF, config.CHART_BARS + 30)
     df_m15 = mt5_connector.get_rates(symbol, config.EXECUTION_TF, config.CHART_BARS + 30)
@@ -307,7 +329,11 @@ def _check_entry(symbol: str):
 
     if config.SMC_FILTER_ENABLED and config.SMC_MECHANICAL_GATE_ENABLED:
         if mech_entry_type == "NONE":
-            logger.info("[Entry] %s: 機械ゲート: セットアップ未検出 → AIコスト節約スキップ", symbol)
+            logger.info(
+                "[Entry] %s: 機械ゲート: セットアップ未検出 → AIコスト節約スキップ "
+                "(sweep=%s bos=%s rr=%s type=%s)",
+                symbol, smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type,
+            )
             return
 
     # MA近傍フィルタ: 順張りの押し目/戻しのみに適用 (逆張りはSweepレベルが遠い場合もある)
@@ -359,7 +385,18 @@ def _check_entry(symbol: str):
 
     # 判定
     if signal.decision == "SKIP":
-        logger.info("[Entry] %s: AI判断 SKIP (conf=%d)", symbol, signal.confidence)
+        logger.info(
+            "[Entry] %s: AI判断 SKIP (conf=%d align=%s h1=%s smc_sweep=%s smc_dir=%s ob=%s fvg=%s reason=%s)",
+            symbol,
+            signal.confidence,
+            signal.alignment,
+            signal.h1_trend,
+            signal.smc_liquidity_sweep,
+            signal.smc_sweep_direction,
+            signal.smc_ob_confirmed,
+            signal.smc_fvg_present,
+            (signal.reasoning or "")[:180].replace("\n", " "),
+        )
         return
 
     if not signal.alignment:
@@ -369,8 +406,8 @@ def _check_entry(symbol: str):
     conf_threshold = adaptive_params.get_confidence_threshold(signal.h1_trend, mech_entry_type)
     if signal.confidence < conf_threshold:
         logger.info(
-            "[Entry] %s: 信頼度不足 %d < %d (adaptive) → スキップ",
-            symbol, signal.confidence, conf_threshold,
+            "[Entry] %s: 信頼度不足 %d < %d (adaptive, entry_type=%s, h1=%s) → スキップ",
+            symbol, signal.confidence, conf_threshold, mech_entry_type, signal.h1_trend,
         )
         return
 
@@ -548,21 +585,35 @@ def _check_single_exit(pos: dict):
     )
 
     if config.FORCE_EXIT_ON_PREMISE_BREAK and not signal.entry_premise_valid:
+        if hold_minutes < config.MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK:
+            logger.info(
+                "[Exit] %s ticket=%s: 根拠崩壊だが保有時間不足 (%d < %d min) → 監視継続",
+                symbol,
+                ticket,
+                hold_minutes,
+                config.MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK,
+            )
+            return
         logger.warning("[Exit] %s ticket=%s: エントリー根拠崩壊 → 強制EXIT", symbol, ticket)
         _execute_exit(pos, signal.reasoning, action_type="EXIT_PREMISE_BREAK")
         return
 
     # EXIT判定（AI中心）
-    if signal.decision == "EXIT" and signal.confidence >= config.EXIT_MIN_CONFIDENCE:
+    required_conf = config.EXIT_MIN_CONFIDENCE
+    if hold_minutes < config.EXIT_EARLY_WINDOW_MINUTES:
+        required_conf = max(required_conf, config.EXIT_MIN_CONFIDENCE_EARLY)
+
+    if signal.decision == "EXIT" and signal.confidence >= required_conf:
         _execute_exit(pos, signal.reasoning, action_type="EXIT_CHECK")
         return
 
-    if signal.decision == "EXIT" and signal.confidence < config.EXIT_MIN_CONFIDENCE:
+    if signal.decision == "EXIT" and signal.confidence < required_conf:
         logger.info(
-            "[Exit] %s: 信頼度不足 %d < %d → HOLD継続",
+            "[Exit] %s: 信頼度不足 %d < %d (hold=%d min) → HOLD継続",
             symbol,
             signal.confidence,
-            config.EXIT_MIN_CONFIDENCE,
+            required_conf,
+            hold_minutes,
         )
 
     # AIが撤退しない場合のみ、機械的な緊急撤退をフォールバック適用

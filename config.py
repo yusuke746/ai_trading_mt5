@@ -21,7 +21,8 @@ OPENAI_EXIT_MODEL = os.getenv("OPENAI_EXIT_MODEL", "gpt-5-nano")
 # 互換性維持: 既存コード/外部スクリプト向け
 OPENAI_MODEL = OPENAI_ENTRY_MODEL
 OPENAI_FINAL_APPROVAL_MODEL = os.getenv("OPENAI_FINAL_APPROVAL_MODEL", "gpt-5.4")
-OPENAI_FINAL_APPROVAL_ENABLED = os.getenv("OPENAI_FINAL_APPROVAL_ENABLED", "true").lower() == "true"
+# デバッグ完了まで無効化 (.envで OPENAI_FINAL_APPROVAL_ENABLED=true にすると再有効化可)
+OPENAI_FINAL_APPROVAL_ENABLED = os.getenv("OPENAI_FINAL_APPROVAL_ENABLED", "false").lower() == "true"
 OPENAI_FINAL_APPROVAL_REASONING_EFFORT = os.getenv("OPENAI_FINAL_APPROVAL_REASONING_EFFORT", "medium")
 
 # 最終承認は高ボラ銘柄 or 高confidence時だけ実行
@@ -110,6 +111,9 @@ ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
 ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
 FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
+MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))
+EXIT_EARLY_WINDOW_MINUTES = int(os.getenv("EXIT_EARLY_WINDOW_MINUTES", "30"))
+EXIT_MIN_CONFIDENCE_EARLY = int(os.getenv("EXIT_MIN_CONFIDENCE_EARLY", "65"))
 
 # ──────────────────────────────────────
 # SMC (Smart Money Concepts) フィルタ設定
@@ -130,10 +134,17 @@ SMC_CONTINUATION_ENABLED = os.getenv("SMC_CONTINUATION_ENABLED", "true").lower()
 SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBACK_BARS", "5"))
 # 順張りBOS判定: MA傾きの最小値 (ATR比率) — この値未満のMA傾きはトレンドなしとみなす
 SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.3"))
+# 機械ゲートRR判定の緩和係数 (1.0未満で緩和、0.5〜1.0の範囲推奨)
+try:
+    SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.9"))))
+except ValueError:
+    SMC_MECHANICAL_RR_RELAX_FACTOR = 0.9
 
 # 市場クローズ時の無駄なAI判定を防ぐため、ティックが古い銘柄は停止中とみなす
 MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))
 LOCK_PROFIT_2_R = float(os.getenv("LOCK_PROFIT_2_R", "1.00"))
+SYMBOL_LOSS_STREAK_PAUSE_TRIGGER = int(os.getenv("SYMBOL_LOSS_STREAK_PAUSE_TRIGGER", "3"))
+SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES = int(os.getenv("SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES", "180"))
 
 # ──────────────────────────────────────
 # チャート画像設定
@@ -173,7 +184,7 @@ ADAPTIVE_ENABLED             = os.getenv("ADAPTIVE_ENABLED", "true").lower() == 
 ADAPTIVE_LOOKBACK_DAYS       = int(os.getenv("ADAPTIVE_LOOKBACK_DAYS", "7"))
 ADAPTIVE_MIN_SAMPLES         = int(os.getenv("ADAPTIVE_MIN_SAMPLES", "10"))
 ADAPTIVE_CONF_STEP           = int(os.getenv("ADAPTIVE_CONF_STEP", "3"))
-ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "60"))
+ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "70"))
 ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "85"))
 ADAPTIVE_CONF_MAX_WEEKLY_DELTA = int(os.getenv("ADAPTIVE_CONF_MAX_WEEKLY_DELTA", "6"))
 ADAPTIVE_LLM_ENABLED         = os.getenv("ADAPTIVE_LLM_ENABLED", "true").lower() == "true"

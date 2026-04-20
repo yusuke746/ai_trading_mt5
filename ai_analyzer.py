@@ -186,7 +186,7 @@ def analyze_entry(symbol: str, current_price: float,
 重要 (逆張りセットアップ): SMCフィルタ有効時は smc_liquidity_sweep が false なら decision を必ず "SKIP" にしてください。
 重要 (順張りセットアップ): smc_ob_confirmed が false の場合は decision を必ず "SKIP" にしてください。
 上位足と下位足のトレンドが一致しない場合も "SKIP" にしてください。
-自信度が60未満の場合も "SKIP" にしてください。
+自信度が70未満の場合も "SKIP" にしてください。
 必ずJSON形式のみで回答してください."""
 
     try:
