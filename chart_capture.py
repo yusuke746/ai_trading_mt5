@@ -224,12 +224,16 @@ def generate_smc_chart_base64(
         hlines_styles.append("solid")
         hlines_widths.append(2.5)
 
-    hlines_cfg = dict(
-        hlines=hlines_prices,
-        colors=hlines_colors,
-        linestyle=hlines_styles,
-        linewidths=hlines_widths,
-    ) if hlines_prices else {}
+    hlines_cfg = (
+        {
+            "hlines": hlines_prices,
+            "colors": hlines_colors,
+            "linestyle": hlines_styles,
+            "linewidths": hlines_widths,
+        }
+        if hlines_prices
+        else None
+    )
 
     # ── ATR 表示 ──
     atr_val = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
@@ -237,8 +241,7 @@ def generate_smc_chart_base64(
     title = f"{symbol}  {timeframe}   ATR({config.ATR_PERIOD})={atr_val:.5f}{title_suffix}"
 
     buf = io.BytesIO()
-    fig, axes = mpf.plot(
-        ohlc,
+    plot_kwargs = dict(
         type="candle",
         style=style,
         addplot=add_plots,
@@ -246,7 +249,13 @@ def generate_smc_chart_base64(
         title=title,
         figsize=fig_size,
         returnfig=True,
-        **hlines_cfg,
+    )
+    if hlines_cfg is not None:
+        plot_kwargs["hlines"] = hlines_cfg
+
+    fig, axes = mpf.plot(
+        ohlc,
+        **plot_kwargs,
     )
 
     # ── OBゾーン・FVGゾーンをfill_betweenで描画 ──

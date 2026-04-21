@@ -201,6 +201,79 @@ def calculate_ma(df: pd.DataFrame, period: int = 20) -> pd.Series:
 
 # ── SMC 価格レベル計算 ──────────────────
 
+def _detect_swings(df: pd.DataFrame, window: int = 3) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    """ピボット高値/安値を返す。戻り値は (index, price)。"""
+    highs: list[tuple[int, float]] = []
+    lows: list[tuple[int, float]] = []
+    if df is None or len(df) < window * 2 + 3:
+        return highs, lows
+
+    end = len(df) - window - 1  # 最後の1本は未確定足として除外
+    for i in range(window, end):
+        h = float(df["high"].iloc[i])
+        lo = float(df["low"].iloc[i])
+        if h == float(df["high"].iloc[i - window: i + window + 1].max()):
+            highs.append((i, h))
+        if lo == float(df["low"].iloc[i - window: i + window + 1].min()):
+            lows.append((i, lo))
+    return highs, lows
+
+
+def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zones: int = 8) -> list[dict]:
+    """3本足でFVGを検出して返す（軽量版）。"""
+    zones: list[dict] = []
+    if df is None or len(df) < 6:
+        return zones
+
+    subset = df.tail(lookback)
+    end = len(subset) - 1  # 最後の足は未確定扱い
+    for i in range(2, end):
+        c0_hi = float(subset["high"].iloc[i - 2])
+        c0_lo = float(subset["low"].iloc[i - 2])
+        c2_hi = float(subset["high"].iloc[i])
+        c2_lo = float(subset["low"].iloc[i])
+
+        if c0_hi < c2_lo:  # Bullish FVG
+            zones.append({
+                "low": round(c0_hi, digits),
+                "high": round(c2_lo, digits),
+                "type": "bull",
+            })
+        if c0_lo > c2_hi:  # Bearish FVG
+            zones.append({
+                "low": round(c2_hi, digits),
+                "high": round(c0_lo, digits),
+                "type": "bear",
+            })
+
+    return zones[-max_zones:]
+
+
+def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 180, max_zones: int = 6) -> list[dict]:
+    """直後のディスプレイスメントでOBを近似検出して返す（軽量版）。"""
+    zones: list[dict] = []
+    if df is None or len(df) < 8:
+        return zones
+
+    subset = df.tail(lookback)
+    disp_th = max(atr * 0.15, 1e-9)
+    end = len(subset) - 2  # 次の2本を参照するため末尾を除外
+
+    for i in range(2, end):
+        o = float(subset["open"].iloc[i])
+        c = float(subset["close"].iloc[i])
+        hi = float(subset["high"].iloc[i])
+        lo = float(subset["low"].iloc[i])
+        next_close_1 = float(subset["close"].iloc[i + 1])
+        next_close_2 = float(subset["close"].iloc[i + 2])
+
+        if c < o and (next_close_1 - hi >= disp_th or next_close_2 - hi >= disp_th):
+            zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bull"})
+        if c > o and (lo - next_close_1 >= disp_th or lo - next_close_2 >= disp_th):
+            zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bear"})
+
+    return zones[-max_zones:]
+
 def get_price_levels(symbol: str, digits: int = 5) -> dict:
     """SMC分析用の価格レベルを計算して返す。
 
@@ -210,12 +283,21 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
           pwh/pwl  : 前週高値/安値 (直近5日足の高安値)
           swing_highs : H1直近スウィング高値リスト (最大5個)
           swing_lows  : H1直近スウィング安値リスト (最大5個)
+                    buy_liquidity / sell_liquidity : 流動性プール候補
+                    bos_levels / choch_levels : 構造ブレイク候補レベル
+                    ob_zones / fvg_zones : M15ベースのゾーン候補
     """
     result: dict = {
         "pdh": None, "pdl": None,
         "pwh": None, "pwl": None,
         "swing_highs": [],
         "swing_lows": [],
+                "buy_liquidity": [],
+                "sell_liquidity": [],
+                "bos_levels": [],
+                "choch_levels": [],
+                "ob_zones": [],
+                "fvg_zones": [],
     }
 
     # PDH / PDL : D1の1本前確定足
@@ -232,21 +314,47 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
         result["pwl"] = round(float(week_slice["low"].min()), digits)
 
     # スウィング高値/安値 : H1で±3本窓のピボット検出 (確定足のみ)
-    df_h1 = get_rates(symbol, "H1", 100)
+    df_h1 = get_rates(symbol, "H1", 180)
     if df_h1 is not None and len(df_h1) >= 10:
-        window = 3
-        highs: list[float] = []
-        lows: list[float] = []
-        # 最後の1本は未確定足のため除外
-        for i in range(window, len(df_h1) - window - 1):
-            h = df_h1["high"].iloc[i]
-            lo = df_h1["low"].iloc[i]
-            if h == df_h1["high"].iloc[i - window: i + window + 1].max():
-                highs.append(round(float(h), digits))
-            if lo == df_h1["low"].iloc[i - window: i + window + 1].min():
-                lows.append(round(float(lo), digits))
+        swings_h, swings_l = _detect_swings(df_h1, window=3)
+        highs = [round(v, digits) for _, v in swings_h]
+        lows = [round(v, digits) for _, v in swings_l]
         result["swing_highs"] = highs[-5:]
         result["swing_lows"] = lows[-5:]
+        result["buy_liquidity"] = highs[-4:]
+        result["sell_liquidity"] = lows[-4:]
+
+        # BOS / CHoCH の簡易判定（H1確定足ベース）
+        if len(swings_h) >= 2 and len(swings_l) >= 2 and len(df_h1) >= 3:
+            prev_high = swings_h[-2][1]
+            last_high = swings_h[-1][1]
+            prev_low = swings_l[-2][1]
+            last_low = swings_l[-1][1]
+            confirmed_close = float(df_h1["close"].iloc[-2])
+
+            trend = "RANGE"
+            if last_high > prev_high and last_low > prev_low:
+                trend = "UP"
+            elif last_high < prev_high and last_low < prev_low:
+                trend = "DOWN"
+
+            if trend == "UP":
+                if confirmed_close > last_high:
+                    result["bos_levels"] = [round(last_high, digits)]
+                if confirmed_close < last_low:
+                    result["choch_levels"] = [round(last_low, digits)]
+            elif trend == "DOWN":
+                if confirmed_close < last_low:
+                    result["bos_levels"] = [round(last_low, digits)]
+                if confirmed_close > last_high:
+                    result["choch_levels"] = [round(last_high, digits)]
+
+    # M15ベースのOB/FVGゾーン
+    df_m15 = get_rates(symbol, "M15", 260)
+    if df_m15 is not None and len(df_m15) >= 20:
+        atr_m15 = calculate_atr(df_m15, config.ATR_PERIOD)
+        result["ob_zones"] = _detect_ob_zones(df_m15, digits=digits, atr=atr_m15)
+        result["fvg_zones"] = _detect_fvg_zones(df_m15, digits=digits)
 
     return result
 

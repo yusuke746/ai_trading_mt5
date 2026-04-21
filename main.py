@@ -9,6 +9,7 @@
 import sys
 import time
 import logging
+import base64
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -393,11 +394,16 @@ def _check_entry(symbol: str):
             )
             return
 
-    # チャート画像生成
-    h1_img, m15_img = chart_capture.generate_chart_pair(symbol)
-    if h1_img is None or m15_img is None:
+    # SMCオーバーレイ付きチャート画像生成
+    h1_b64, m15_b64 = chart_capture.generate_smc_chart_pair_base64(
+        symbol=symbol,
+        smc_features=smc_data,
+    )
+    if h1_b64 is None or m15_b64 is None:
         logger.warning("[Entry] %s: チャート画像生成失敗", symbol)
         return
+    h1_img = base64.b64decode(h1_b64)
+    m15_img = base64.b64decode(m15_b64)
 
     # AI分析
     account = mt5_connector.get_account_info()
