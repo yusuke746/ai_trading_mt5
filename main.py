@@ -543,6 +543,7 @@ def _check_entry(symbol: str):
         ai_smc_fvg=signal.smc_fvg_present,
         entry_type=mech_entry_type,
         market_regime=signal.h1_trend,
+        invalidation_price=signal.invalidation_price,
     )
 
     # Discord通知
@@ -594,7 +595,24 @@ def _check_single_exit(pos: dict):
         return
 
     # 保有中の監視足は設定で切り替え可能
-    exit_img = chart_capture.generate_chart(symbol, config.EXIT_MONITOR_TF)
+    # invalidation_price が DB に記録されていれば、それを赤線としてチャートに描画
+    invalidation_price: float | None = None
+    if trade and trade.get("invalidation_price") is not None:
+        try:
+            invalidation_price = float(trade["invalidation_price"])
+        except (TypeError, ValueError):
+            pass
+
+    # SMCオーバーレイ付きチャートを生成（invalidation_price があれば赤線入り）
+    if invalidation_price is not None:
+        exit_img_b64 = chart_capture.generate_smc_chart_base64(
+            symbol, config.EXIT_MONITOR_TF, invalidation_price=invalidation_price
+        )
+        # base64文字列をbytesに戻す（analyze_exitのインターフェース互換のため）
+        import base64 as _b64
+        exit_img = _b64.b64decode(exit_img_b64) if exit_img_b64 else None
+    else:
+        exit_img = chart_capture.generate_chart(symbol, config.EXIT_MONITOR_TF)
     if exit_img is None:
         return
 
@@ -614,6 +632,7 @@ def _check_single_exit(pos: dict):
         entry_news_impact=(trade.get("news_summary", "") if trade else ""),
         tp_price=(trade.get("tp_price") if trade else pos.get("tp")),
         current_sl=pos.get("sl"),
+        invalidation_price=invalidation_price,
     )
 
     # AIログ保存

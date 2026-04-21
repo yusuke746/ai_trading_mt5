@@ -88,6 +88,229 @@ def generate_chart_pair(symbol: str) -> tuple[bytes | None, bytes | None]:
     return h1_img, m15_img
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 3. SMCオーバーレイ付きチャート生成 (メモリ上)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def generate_smc_chart_base64(
+    symbol: str,
+    timeframe: str,
+    smc_features: dict | None = None,
+    invalidation_price: float | None = None,
+    bars: int = config.CHART_BARS,
+) -> str | None:
+    """SMC特徴量をオーバーレイしたローソク足チャートを生成し、base64文字列で返す。
+
+    Args:
+        symbol: MT5銘柄名
+        timeframe: タイムフレーム ("H1", "M15" など)
+        smc_features: SMC特徴量の辞書。以下のキーをサポート:
+            bos_levels      : list[float]  BOS価格レベルリスト
+            choch_levels    : list[float]  CHoCH価格レベルリスト
+            ob_zones        : list[dict]   OBゾーン {"high": float, "low": float, "type": "bull"|"bear"}
+            fvg_zones       : list[dict]   FVGゾーン {"high": float, "low": float}
+            buy_liquidity   : list[float]  Buy-side Liquidity価格リスト
+            sell_liquidity  : list[float]  Sell-side Liquidity価格リスト
+            swing_highs     : list[float]  スウィング高値リスト (get_price_levels互換)
+            swing_lows      : list[float]  スウィング安値リスト
+            pdh             : float        前日高値
+            pdl             : float        前日安値
+            pwh             : float        前週高値
+            pwl             : float        前週安値
+        invalidation_price: エグジット監視用の無効化ライン価格 (赤い太線で描画)
+        bars: 表示するバー数
+
+    Returns:
+        base64エンコードされたPNG文字列、失敗時はNone
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    df = mt5_connector.get_rates(symbol, timeframe, bars + config.MA_PERIOD)
+    if df is None or len(df) < config.MA_PERIOD + 10:
+        logger.error("SMCチャート生成失敗: データ不足 %s %s", symbol, timeframe)
+        return None
+
+    ohlc = df.rename(columns={
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "tick_volume": "Volume",
+    })[["Open", "High", "Low", "Close", "Volume"]]
+    ohlc = ohlc.tail(bars)
+
+    smc = smc_features or {}
+
+    # ── addplot リスト構築 ──────────────────────
+    add_plots = []
+
+    # MA20
+    ma_series = ohlc["Close"].rolling(config.MA_PERIOD).mean()
+    add_plots.append(mpf.make_addplot(ma_series, color="royalblue", width=1.2, label="MA20"))
+
+    # BOS水平線: 各レベルをパネルに重ねる (mplfinanceのhlines引数で描画)
+    bos_levels: list[float] = smc.get("bos_levels", [])
+    choch_levels: list[float] = smc.get("choch_levels", [])
+
+    style = mpf.make_mpf_style(
+        base_mpf_style="charles",
+        rc={"font.size": 8},
+    )
+
+    fig_size = (config.CHART_WIDTH / 100, config.CHART_HEIGHT / 100)
+
+    # ── hlines (水平線) 引数構築 ──
+    hlines_prices: list[float] = []
+    hlines_colors: list[str] = []
+    hlines_styles: list[str] = []
+    hlines_widths: list[float] = []
+
+    # BOS: 青の実線
+    for lvl in bos_levels:
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("dodgerblue")
+        hlines_styles.append("solid")
+        hlines_widths.append(1.2)
+
+    # CHoCH: オレンジの破線
+    for lvl in choch_levels:
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("darkorange")
+        hlines_styles.append("dashed")
+        hlines_widths.append(1.2)
+
+    # Buy-side / Sell-side Liquidity: 点線
+    for lvl in smc.get("buy_liquidity", []):
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("limegreen")
+        hlines_styles.append("dotted")
+        hlines_widths.append(1.0)
+
+    for lvl in smc.get("sell_liquidity", []):
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("red")
+        hlines_styles.append("dotted")
+        hlines_widths.append(1.0)
+
+    # PDH/PDL/PWH/PWL (get_price_levels互換)
+    for key, color in [("pdh", "gold"), ("pdl", "gold"), ("pwh", "orchid"), ("pwl", "orchid")]:
+        val = smc.get(key)
+        if val is not None:
+            hlines_prices.append(float(val))
+            hlines_colors.append(color)
+            hlines_styles.append("dashed")
+            hlines_widths.append(1.0)
+
+    # スウィング高値/安値: 紫の点線
+    for lvl in smc.get("swing_highs", []):
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("mediumpurple")
+        hlines_styles.append("dotted")
+        hlines_widths.append(0.9)
+
+    for lvl in smc.get("swing_lows", []):
+        hlines_prices.append(float(lvl))
+        hlines_colors.append("mediumpurple")
+        hlines_styles.append("dotted")
+        hlines_widths.append(0.9)
+
+    # 無効化ライン (エグジット用): 太い赤実線
+    if invalidation_price is not None:
+        hlines_prices.append(float(invalidation_price))
+        hlines_colors.append("crimson")
+        hlines_styles.append("solid")
+        hlines_widths.append(2.5)
+
+    hlines_cfg = dict(
+        hlines=hlines_prices,
+        colors=hlines_colors,
+        linestyle=hlines_styles,
+        linewidths=hlines_widths,
+    ) if hlines_prices else {}
+
+    # ── ATR 表示 ──
+    atr_val = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
+    title_suffix = f"  【無効化ライン: {invalidation_price}】" if invalidation_price is not None else ""
+    title = f"{symbol}  {timeframe}   ATR({config.ATR_PERIOD})={atr_val:.5f}{title_suffix}"
+
+    buf = io.BytesIO()
+    fig, axes = mpf.plot(
+        ohlc,
+        type="candle",
+        style=style,
+        addplot=add_plots,
+        volume=True,
+        title=title,
+        figsize=fig_size,
+        returnfig=True,
+        **hlines_cfg,
+    )
+
+    # ── OBゾーン・FVGゾーンをfill_betweenで描画 ──
+    ax_main = axes[0]
+    x_indices = np.arange(len(ohlc))
+
+    ob_zones: list[dict] = smc.get("ob_zones", [])
+    fvg_zones: list[dict] = smc.get("fvg_zones", [])
+
+    for zone in ob_zones:
+        try:
+            hi = float(zone["high"])
+            lo = float(zone["low"])
+            zone_type = str(zone.get("type", "bull")).lower()
+            color = "rgba(0,200,100,0.15)" if zone_type == "bull" else "rgba(220,50,50,0.15)"
+            # matplotlibはrgba文字列不可 → (r,g,b,a) tupleに変換
+            if zone_type == "bull":
+                fc = (0.0, 0.78, 0.39, 0.15)
+                ec = (0.0, 0.78, 0.39, 0.6)
+            else:
+                fc = (0.86, 0.20, 0.20, 0.15)
+                ec = (0.86, 0.20, 0.20, 0.6)
+            ax_main.fill_between(x_indices, lo, hi, alpha=0.15,
+                                 facecolor=fc[:3], edgecolor=ec[:3], linewidth=0.5)
+            ax_main.axhline(y=hi, color=ec[:3], linewidth=0.6, linestyle="--", alpha=0.7)
+            ax_main.axhline(y=lo, color=ec[:3], linewidth=0.6, linestyle="--", alpha=0.7)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug("OBゾーン描画スキップ: %s", e)
+
+    for zone in fvg_zones:
+        try:
+            hi = float(zone["high"])
+            lo = float(zone["low"])
+            # FVG: シアン系で塗りつぶし
+            ax_main.fill_between(x_indices, lo, hi, alpha=0.12,
+                                 facecolor=(0.0, 0.75, 0.85), edgecolor=(0.0, 0.6, 0.8),
+                                 linewidth=0.5)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug("FVGゾーン描画スキップ: %s", e)
+
+    fig.savefig(buf, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    png_bytes = buf.read()
+    buf.close()
+
+    return base64.standard_b64encode(png_bytes).decode("utf-8")
+
+
+def generate_smc_chart_pair_base64(
+    symbol: str,
+    smc_features: dict | None = None,
+    invalidation_price: float | None = None,
+) -> tuple[str | None, str | None]:
+    """H1 と M15 のSMCオーバーレイ付きチャートをbase64で返す。
+
+    エントリー時: invalidation_price=None で両足生成
+    エグジット監視時: invalidation_price を指定してM15のみ生成してもよい
+    """
+    h1_b64 = generate_smc_chart_base64(symbol, config.TREND_TF, smc_features, None)
+    m15_b64 = generate_smc_chart_base64(symbol, config.EXECUTION_TF, smc_features, invalidation_price)
+    return h1_b64, m15_b64
+
+
 def chart_to_base64(png_bytes: bytes) -> str:
     return base64.standard_b64encode(png_bytes).decode("utf-8")
 

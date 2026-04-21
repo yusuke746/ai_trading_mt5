@@ -35,6 +35,7 @@ def _migrate_db(conn: sqlite3.Connection):
         ("ai_smc_fvg",     "INTEGER"),
         ("entry_type",     "TEXT"),
         ("market_regime",  "TEXT"),
+        ("invalidation_price", "REAL"),
     ]
     for col, typ in new_cols:
         if col not in existing:
@@ -70,7 +71,8 @@ def init_db():
                 ai_smc_ob       INTEGER,
                 ai_smc_fvg      INTEGER,
                 entry_type      TEXT,
-                market_regime   TEXT
+                market_regime   TEXT,
+                invalidation_price REAL
             );
 
             CREATE TABLE IF NOT EXISTS ai_logs (
@@ -118,7 +120,8 @@ def insert_trade(symbol: str, direction: str, entry_price: float,
                  ai_smc_ob: bool | None = None,
                  ai_smc_fvg: bool | None = None,
                  entry_type: str | None = None,
-                 market_regime: str | None = None) -> int:
+                 market_regime: str | None = None,
+                 invalidation_price: float | None = None) -> int:
     def _b(v): return int(v) if v is not None else None
     with _get_conn() as conn:
         cur = conn.execute(
@@ -126,13 +129,14 @@ def insert_trade(symbol: str, direction: str, entry_price: float,
                (opened_at, symbol, direction, entry_price, lot_size,
                 sl_price, tp_price, ai_reasoning, news_summary, mt5_ticket, status,
                 smc_sweep_pass, smc_bos_pass, smc_rr_pass,
-                     ai_confidence, ai_smc_sweep, ai_smc_ob, ai_smc_fvg, entry_type, market_regime)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     ai_confidence, ai_smc_sweep, ai_smc_ob, ai_smc_fvg, entry_type, market_regime, invalidation_price)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (datetime.utcnow().isoformat(), symbol, direction,
              entry_price, lot_size, sl_price, tp_price,
              ai_reasoning, news_summary, mt5_ticket,
              _b(smc_sweep_pass), _b(smc_bos_pass), _b(smc_rr_pass),
-                 ai_confidence, _b(ai_smc_sweep), _b(ai_smc_ob), _b(ai_smc_fvg), entry_type, market_regime),
+                 ai_confidence, _b(ai_smc_sweep), _b(ai_smc_ob), _b(ai_smc_fvg), entry_type, market_regime,
+                 invalidation_price),
         )
         return cur.lastrowid
 
