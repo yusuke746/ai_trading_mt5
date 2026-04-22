@@ -22,7 +22,7 @@ OPENAI_EXIT_MODEL = os.getenv("OPENAI_EXIT_MODEL", "gpt-5-nano")
 OPENAI_MODEL = OPENAI_ENTRY_MODEL
 OPENAI_FINAL_APPROVAL_MODEL = os.getenv("OPENAI_FINAL_APPROVAL_MODEL", "gpt-5.4")
 # デバッグ完了まで無効化 (.envで OPENAI_FINAL_APPROVAL_ENABLED=true にすると再有効化可)
-OPENAI_FINAL_APPROVAL_ENABLED = os.getenv("OPENAI_FINAL_APPROVAL_ENABLED", "false")
+OPENAI_FINAL_APPROVAL_ENABLED = os.getenv("OPENAI_FINAL_APPROVAL_ENABLED", "false").lower() == "true"
 OPENAI_FINAL_APPROVAL_REASONING_EFFORT = os.getenv("OPENAI_FINAL_APPROVAL_REASONING_EFFORT", "medium")
 
 # 最終承認は高ボラ銘柄 or 高confidence時だけ実行
@@ -37,7 +37,7 @@ FINAL_APPROVAL_MIN_CONFIDENCE = int(os.getenv("FINAL_APPROVAL_MIN_CONFIDENCE", "
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_ENTRY_MODEL = os.getenv("OPENROUTER_ENTRY_MODEL", "qwen/qwen2.5-vl-72b-instruct")
 # true にするとエントリー分析をOpenRouter経由に切り替え (エグジットは引き続きOpenAI)
-USE_OPENROUTER_FOR_ENTRY = os.getenv("USE_OPENROUTER_FOR_ENTRY", "false")
+USE_OPENROUTER_FOR_ENTRY = os.getenv("USE_OPENROUTER_FOR_ENTRY", "false").lower() == "true"
 
 # ──────────────────────────────────────
 # Discord Webhook
@@ -91,7 +91,7 @@ MA_PERIOD = 20
 # ──────────────────────────────────────
 # 機械式緊急エグジット設定
 # ──────────────────────────────────────
-EMERGENCY_EXIT_ENABLED = os.getenv("EMERGENCY_EXIT_ENABLED", "true")
+EMERGENCY_EXIT_ENABLED = os.getenv("EMERGENCY_EXIT_ENABLED", "true").lower() == "true"
 EMERGENCY_EXIT_ADVERSE_ATR = float(os.getenv("EMERGENCY_EXIT_ADVERSE_ATR", "1.8"))
 EMERGENCY_EXIT_ATR_SPIKE_MULTIPLIER = float(os.getenv("EMERGENCY_EXIT_ATR_SPIKE_MULTIPLIER", "1.8"))
 EMERGENCY_EXIT_ATR_SPIKE_MIN_ADVERSE_ATR = float(os.getenv("EMERGENCY_EXIT_ATR_SPIKE_MIN_ADVERSE_ATR", "0.8"))
@@ -107,13 +107,13 @@ EMERGENCY_EXIT_ADVERSE_ATR_BY_SYMBOL = {
 # ──────────────────────────────────────
 # 利益保護設定
 # ──────────────────────────────────────
-PROFIT_PROTECTION_ENABLED = os.getenv("PROFIT_PROTECTION_ENABLED", "true")
+PROFIT_PROTECTION_ENABLED = os.getenv("PROFIT_PROTECTION_ENABLED", "true").lower() == "true"
 BREAKEVEN_R = float(os.getenv("BREAKEVEN_R", "1.0"))
 BREAKEVEN_BUFFER_R = float(os.getenv("BREAKEVEN_BUFFER_R", "0.10"))
 LOCK_PROFIT_1_TRIGGER_R = float(os.getenv("LOCK_PROFIT_1_TRIGGER_R", "1.5"))
 LOCK_PROFIT_1_R = float(os.getenv("LOCK_PROFIT_1_R", "0.50"))
 LOCK_PROFIT_2_TRIGGER_R = float(os.getenv("LOCK_PROFIT_2_TRIGGER_R", "2.0"))
-FLAT_BEFORE_MARKET_CLOSE_ENABLED = os.getenv("FLAT_BEFORE_MARKET_CLOSE_ENABLED", "true")
+FLAT_BEFORE_MARKET_CLOSE_ENABLED = os.getenv("FLAT_BEFORE_MARKET_CLOSE_ENABLED", "true").lower() == "true"
 FLAT_BEFORE_MARKET_CLOSE_HOUR = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_HOUR", "0"))
 FLAT_BEFORE_MARKET_CLOSE_MINUTE = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_MINUTE", "0"))
 FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES = max(0, int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES", "15")))
@@ -122,7 +122,7 @@ FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES = max(0, int(os.getenv("FLAT_BEFORE_MARKET
 ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
 ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
-FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true")
+FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
 MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))
 EXIT_EARLY_WINDOW_MINUTES = int(os.getenv("EXIT_EARLY_WINDOW_MINUTES", "30"))
 EXIT_MIN_CONFIDENCE_EARLY = int(os.getenv("EXIT_MIN_CONFIDENCE_EARLY", "65"))
@@ -181,7 +181,7 @@ NEWS_MONITOR_MODEL = os.getenv("NEWS_MONITOR_MODEL", "gpt-5-nano")
 # キャッシュ有効期限 (分) — ポーリング間隔より少し長めに設定
 NEWS_CACHE_EXPIRE_MINUTES = max(15, int(os.getenv("NEWS_CACHE_EXPIRE_MINUTES", "45")))
 # MEDIUMリスクもエントリーブロックするか (デフォルト=False でHIGHのみブロック)
-NEWS_BLOCK_ON_MEDIUM = os.getenv("NEWS_BLOCK_ON_MEDIUM", "false")
+NEWS_BLOCK_ON_MEDIUM = os.getenv("NEWS_BLOCK_ON_MEDIUM", "false").lower() == "true"
 
 # ──────────────────────────────────────
 # チャート画像設定
