@@ -205,6 +205,26 @@ def get_symbol_recent_loss_streak(symbol: str, lookback: int = 10) -> dict:
     }
 
 
+def get_recent_premise_break_exit(symbol: str, direction: str) -> dict | None:
+    """同一銘柄・同方向の直近PREMISE_BREAK決済を返す。"""
+    with _get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT closed_at, exit_reason, direction
+            FROM trades
+            WHERE symbol = ?
+              AND direction = ?
+              AND status = 'CLOSED'
+              AND exit_reason = 'PREMISE_BREAK'
+              AND closed_at IS NOT NULL
+            ORDER BY datetime(closed_at) DESC
+            LIMIT 1
+            """,
+            (symbol, direction),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def update_trade_sl_by_ticket(mt5_ticket: int, sl_price: float):
     with _get_conn() as conn:
         conn.execute(

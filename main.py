@@ -23,6 +23,7 @@ import ai_analyzer
 import discord_notifier
 import trade_logger
 import adaptive_params
+import news_monitor
 
 # ── ログ設定 ────────────────────────────
 
@@ -96,6 +97,9 @@ def main():
     # DB 初期化
     trade_logger.init_db()
     _run_db_maintenance(full_vacuum=False)
+
+    # ニュース監視スレッド起動 (経済カレンダー + nanoニュースポーリング)
+    news_monitor.start_background_monitor()
 
     # MT5 接続
     if not mt5_connector.initialize():
@@ -288,6 +292,64 @@ def _mechanical_smc_gate(
     return False, False, False, "NONE", "NONE"
 
 
+def _entry_direction_from_mech_gate(sweep_type: str, entry_type: str) -> str | None:
+    """機械ゲート結果から想定エントリー方向を推定する。"""
+    if entry_type == "NONE":
+        return None
+    sweep_type = str(sweep_type).upper()
+    if sweep_type == "LOW":
+        return "BUY"
+    if sweep_type == "HIGH":
+        return "SELL"
+    return None
+
+
+def _timeframe_to_minutes(timeframe: str) -> int:
+    """M15/H1/D1 などを分に変換する。"""
+    tf = str(timeframe).strip().upper()
+    if not tf:
+        return 15
+    unit = tf[0]
+    try:
+        value = int(tf[1:])
+    except ValueError:
+        return 15
+
+    if unit == "M":
+        return value
+    if unit == "H":
+        return value * 60
+    if unit == "D":
+        return value * 1440
+    return 15
+
+
+def _should_flatten_before_market_close(now: datetime | None = None) -> str | None:
+    """市場クローズ前の持ち越し回避ウィンドウなら理由を返す。"""
+    if not config.FLAT_BEFORE_MARKET_CLOSE_ENABLED:
+        return None
+
+    current = now or datetime.now()
+    close_dt = current.replace(
+        hour=config.FLAT_BEFORE_MARKET_CLOSE_HOUR,
+        minute=config.FLAT_BEFORE_MARKET_CLOSE_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    if close_dt <= current:
+        close_dt += timedelta(days=1)
+
+    minutes_to_close = (close_dt - current).total_seconds() / 60
+    lead_minutes = config.FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES
+    if 0 <= minutes_to_close <= lead_minutes:
+        return (
+            f"市場クローズ前の持ち越し回避: クローズまで{minutes_to_close:.0f}分 "
+            f"(設定 {config.FLAT_BEFORE_MARKET_CLOSE_HOUR:02d}:{config.FLAT_BEFORE_MARKET_CLOSE_MINUTE:02d}, "
+            f"lead={lead_minutes}分)"
+        )
+    return None
+
+
 # ── エントリーチェック ──────────────────
 
 def _check_entry(symbol: str):
@@ -329,6 +391,13 @@ def _check_entry(symbol: str):
                 return
         except ValueError:
             pass
+
+    # ニュース・経済カレンダーチェック (キャッシュ参照のみ、API呼び出しなし)
+    news_blocked, news_reason = news_monitor.check_entry_news_block(symbol)
+    if news_blocked:
+        logger.info("[Entry] %s: ニュースブロック → スキップ (%s)", symbol, news_reason)
+        discord_notifier.send_skip(symbol, news_reason, notify=False)
+        return
 
     # レートデータ取得
     df_h1 = mt5_connector.get_rates(symbol, config.TREND_TF, config.CHART_BARS + 30)
@@ -375,12 +444,51 @@ def _check_entry(symbol: str):
         symbol, smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type, mech_entry_type,
     )
 
+    # PREMISE_BREAK後の同方向再エントリーを一定本数ブロック
+    inferred_direction = _entry_direction_from_mech_gate(mech_sweep_type, mech_entry_type)
+    if config.PREMISE_BREAK_REENTRY_BLOCK_ENABLED and inferred_direction:
+        recent_premise_break = trade_logger.get_recent_premise_break_exit(symbol, inferred_direction)
+        closed_at = recent_premise_break.get("closed_at") if recent_premise_break else None
+        if closed_at:
+            try:
+                last_break_dt = _as_utc(datetime.fromisoformat(closed_at))
+                elapsed_min = (datetime.now(UTC) - last_break_dt).total_seconds() / 60
+                block_minutes = _timeframe_to_minutes(config.EXECUTION_TF) * config.PREMISE_BREAK_REENTRY_BLOCK_BARS
+                if elapsed_min < block_minutes:
+                    logger.warning(
+                        "[Entry] %s: PREMISE_BREAK後の同方向再エントリー禁止中 (%s %.0f/%.0f min, %d bars) → スキップ",
+                        symbol,
+                        inferred_direction,
+                        elapsed_min,
+                        block_minutes,
+                        config.PREMISE_BREAK_REENTRY_BLOCK_BARS,
+                    )
+                    return
+            except ValueError:
+                pass
+
     if config.SMC_FILTER_ENABLED and config.SMC_MECHANICAL_GATE_ENABLED:
         if mech_entry_type == "NONE":
             logger.info(
                 "[Entry] %s: 機械ゲート: セットアップ未検出 → AIコスト節約スキップ "
                 "(sweep=%s bos=%s rr=%s type=%s)",
                 symbol, smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type,
+            )
+            return
+        # RR不足は AI呼び出し前にスキップ (コスト節約)
+        if not smc_rr_pass:
+            logger.info(
+                "[Entry] %s: 機械ゲート: RR不足 → AIコスト節約スキップ "
+                "(rr_pass=False entry_type=%s)",
+                symbol, mech_entry_type,
+            )
+            return
+        # 順張りでbos_pass=Falseも事前スキップ
+        if mech_entry_type == "CONTINUATION_BOS" and not smc_bos_pass:
+            logger.info(
+                "[Entry] %s: 機械ゲート: BOS未確認 → AIコスト節約スキップ "
+                "(bos_pass=False entry_type=%s)",
+                symbol, mech_entry_type,
             )
             return
 
@@ -595,6 +703,17 @@ def _check_single_exit(pos: dict):
     trade = trade_logger.get_open_trade_by_ticket(ticket)
 
     _manage_profit_protection(pos)
+
+    close_window_reason = _should_flatten_before_market_close()
+    if close_window_reason:
+        logger.warning(
+            "[Exit SessionClose] %s ticket=%s: %s",
+            symbol,
+            ticket,
+            close_window_reason,
+        )
+        _execute_exit(pos, close_window_reason, action_type="EXIT_SESSION_CLOSE")
+        return
 
     if not mt5_connector.is_symbol_market_active(symbol):
         logger.info("[Exit] %s ticket=%s: 市場クローズ/気配停止中 → AI判定スキップ", symbol, ticket)
@@ -845,6 +964,7 @@ def _execute_exit(pos: dict, reasoning: str, action_type: str):
         "EXIT_CHECK":        "AI_EXIT",
         "EXIT_EMERGENCY":    "EMERGENCY",
         "EXIT_PREMISE_BREAK": "PREMISE_BREAK",
+        "EXIT_SESSION_CLOSE": "SESSION_CLOSE",
     }
     exit_reason = _ACTION_TO_EXIT_REASON.get(action_type, action_type)
     symbol = pos["symbol"]

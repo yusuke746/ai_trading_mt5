@@ -1,9 +1,10 @@
 """OpenAI Responses API 連携モジュール
 
-GPT-5 mini + web_search_preview を使用して:
-  1. H1 + M15 チャート画像からエントリー判断
-  2. 保有ポジションのエグジット判断
-  3. ニュース検索による市場環境評価
+GPT-5系モデルを使用して:
+    1. H1 + M15 チャート画像からエントリー判断
+    2. 保有ポジションのエグジット判断
+
+ニュース評価は別モジュール(news_monitor.py)のバックグラウンド処理で実施する。
 """
 
 import json
@@ -18,6 +19,7 @@ import chart_capture
 logger = logging.getLogger(__name__)
 
 _client: OpenAI | None = None
+_openrouter_client: OpenAI | None = None
 
 
 def _get_client() -> OpenAI:
@@ -25,6 +27,19 @@ def _get_client() -> OpenAI:
     if _client is None:
         _client = OpenAI(api_key=config.OPENAI_API_KEY)
     return _client
+
+
+def _get_openrouter_client() -> OpenAI:
+    """OpenRouter用クライアント (openaiライブラリ互換、base_urlだけ差し替え)"""
+    global _openrouter_client
+    if _openrouter_client is None:
+        if not config.OPENROUTER_API_KEY:
+            raise ValueError("OPENROUTER_API_KEY が .env に設定されていません")
+        _openrouter_client = OpenAI(
+            api_key=config.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+        )
+    return _openrouter_client
 
 
 # ── レスポンス構造体 ────────────────────
@@ -139,7 +154,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
 - 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
 - 逆張り: smc_liquidity_sweep=false
 - 順張り: smc_ob_confirmed=false
-- web検索で重大なニュース/指標リスクが確認できた場合
+- 外部ニュース監視で重大リスクが検知されている場合
 
 【回答フォーマット (JSONのみ)】
 {{
@@ -153,7 +168,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
     "smc_ob_confirmed": true or false,
     "smc_fvg_present": true or false,
     "reasoning": "判断理由（チャートで確認した構造を簡潔に）",
-    "news_impact": "web検索で確認した直近ニュースの要約",
+    "news_impact": "N/A (news_monitorにて別管理)",
     "sl_distance": SL幅の数値(price単位、Sweep起点または直近スウィング外側),
     "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上),
     "invalidation_price": このエントリーのSMC構造が完全に崩壊する具体的な価格(数値)
@@ -162,29 +177,34 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
 必ずJSON形式のみで回答してください。"""
 
     try:
-        client = _get_client()
-        response = client.responses.create(
-            model=config.OPENAI_ENTRY_MODEL,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/png;base64,{h1_b64}",
-                        },
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/png;base64,{m15_b64}",
-                        },
-                    ],
-                }
-            ],
-            tools=[{"type": "web_search_preview"}],
-        )
+        if config.USE_OPENROUTER_FOR_ENTRY:
+            raw_text = _analyze_entry_via_openrouter(
+                symbol=symbol, prompt=prompt,
+                h1_b64=h1_b64, m15_b64=m15_b64,
+            )
+        else:
+            client = _get_client()
+            response = client.responses.create(
+                model=config.OPENAI_ENTRY_MODEL,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{h1_b64}",
+                            },
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{m15_b64}",
+                            },
+                        ],
+                    }
+                ],
+            )
+            raw_text = response.output_text
 
-        raw_text = response.output_text
         logger.info("[AI Entry] %s raw response length: %d", symbol, len(raw_text))
 
         primary_signal = _apply_entry_signal_guards(
@@ -223,6 +243,44 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
             raw_response=str(e),
             smc_liquidity_sweep=False,
         )
+
+
+def _analyze_entry_via_openrouter(symbol: str, prompt: str, h1_b64: str, m15_b64: str) -> str:
+    """OpenRouter (Qwen-VL等) を使ったエントリー分析。
+    Chat Completions API (vision対応) を使用。
+    ※ web_search_preview は非対応のためnews_impactは 'N/A' になる。
+    """
+    model_name = config.OPENROUTER_ENTRY_MODEL
+    logger.info("[AI Entry OpenRouter] %s model=%s", symbol, model_name)
+
+    # web検索がないことをプロンプトに付記
+    or_prompt = (
+        prompt
+        + "\n\n※ web検索ツールは使用不可。news_impact は \"N/A (web検索非対応)\" と記入してください。"
+    )
+
+    client = _get_openrouter_client()
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": or_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{h1_b64}"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{m15_b64}"},
+                    },
+                ],
+            }
+        ],
+        max_tokens=1024,
+    )
+    return response.choices[0].message.content or ""
 
 
 # ── エグジット分析 ──────────────────────
@@ -291,7 +349,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
   - 目前で明確な反転シグナル（長ヒゲ・Engulfinなど）が出ているか？
 
 ■ ステップ3: ニュース確認
-  - web検索で{symbol}の直近ニュースを確認し、エントリー前提を覆す材料がないか確認する
+    - ニュースは外部モジュール(news_monitor)で別途監視済み。ここではチャート構造と無効化ライン判定を優先する
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【判断基準】
@@ -313,7 +371,7 @@ HOLD条件 (以下をすべて満たす):
     "entry_premise_valid": true or false,
     "invalidation_breached": true or false,
     "reasoning": "判断理由（赤線ブレイクの有無、終値ベースの事実を含む）",
-    "news_impact": "web検索で確認した直近ニュースの要約"
+    "news_impact": "N/A (news_monitorにて別管理)"
 }}
 
 重要: invalidation_breached が true の場合は entry_premise_valid を false、decision を必ず EXIT にしてください。
@@ -336,7 +394,6 @@ HOLD条件 (以下をすべて満たす):
                     ],
                 }
             ],
-            tools=[{"type": "web_search_preview"}],
         )
 
         raw_text = response.output_text
@@ -378,10 +435,8 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
         skip_reasons.append("h1_sideways")
     if not signal.alignment:
         skip_reasons.append("trend_misalignment")
-    if mech_gate and not mech_gate.get("rr_pass", False):
-        skip_reasons.append("mechanical_rr_failed")
-    if mech_gate and not mech_gate.get("bos_pass", False):
-        skip_reasons.append("mechanical_bos_failed")
+    # mechanical_rr / mechanical_bos は main.py で AI呼び出し前にチェック済み
+    # ここでは重複チェックしない
 
     mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
 
@@ -469,7 +524,6 @@ def _run_entry_final_approval(symbol: str, current_price: float,
                     ],
                 }
             ],
-            tools=[{"type": "web_search_preview"}],
             reasoning={"effort": config.OPENAI_FINAL_APPROVAL_REASONING_EFFORT},
         )
 

@@ -32,6 +32,14 @@ FINAL_APPROVAL_SYMBOLS = {
 FINAL_APPROVAL_MIN_CONFIDENCE = int(os.getenv("FINAL_APPROVAL_MIN_CONFIDENCE", "75"))
 
 # ──────────────────────────────────────
+# OpenRouter (Qwen-VL等マルチモデル対応)
+# ──────────────────────────────────────
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_ENTRY_MODEL = os.getenv("OPENROUTER_ENTRY_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+# true にするとエントリー分析をOpenRouter経由に切り替え (エグジットは引き続きOpenAI)
+USE_OPENROUTER_FOR_ENTRY = os.getenv("USE_OPENROUTER_FOR_ENTRY", "false").lower() == "true"
+
+# ──────────────────────────────────────
 # Discord Webhook
 # ──────────────────────────────────────
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
@@ -105,6 +113,10 @@ BREAKEVEN_BUFFER_R = float(os.getenv("BREAKEVEN_BUFFER_R", "0.10"))
 LOCK_PROFIT_1_TRIGGER_R = float(os.getenv("LOCK_PROFIT_1_TRIGGER_R", "1.5"))
 LOCK_PROFIT_1_R = float(os.getenv("LOCK_PROFIT_1_R", "0.50"))
 LOCK_PROFIT_2_TRIGGER_R = float(os.getenv("LOCK_PROFIT_2_TRIGGER_R", "2.0"))
+FLAT_BEFORE_MARKET_CLOSE_ENABLED = os.getenv("FLAT_BEFORE_MARKET_CLOSE_ENABLED", "true").lower() == "true"
+FLAT_BEFORE_MARKET_CLOSE_HOUR = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_HOUR", "0"))
+FLAT_BEFORE_MARKET_CLOSE_MINUTE = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_MINUTE", "0"))
+FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES = max(0, int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES", "15")))
 
 # 利確優先のTP設定
 ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
@@ -147,6 +159,29 @@ MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))
 LOCK_PROFIT_2_R = float(os.getenv("LOCK_PROFIT_2_R", "1.00"))
 SYMBOL_LOSS_STREAK_PAUSE_TRIGGER = int(os.getenv("SYMBOL_LOSS_STREAK_PAUSE_TRIGGER", "3"))
 SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES = int(os.getenv("SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES", "180"))
+PREMISE_BREAK_REENTRY_BLOCK_ENABLED = os.getenv("PREMISE_BREAK_REENTRY_BLOCK_ENABLED", "true").lower() == "true"
+PREMISE_BREAK_REENTRY_BLOCK_BARS = max(0, int(os.getenv("PREMISE_BREAK_REENTRY_BLOCK_BARS", "2")))
+
+# ──────────────────────────────────────
+# ニュース監視設定
+# ──────────────────────────────────────
+# ForexFactory 経済カレンダーによるエントリーブロック
+NEWS_CALENDAR_ENABLED = os.getenv("NEWS_CALENDAR_ENABLED", "true").lower() == "true"
+# カレンダー取得間隔 (分)
+NEWS_CALENDAR_INTERVAL_MINUTES = max(10, int(os.getenv("NEWS_CALENDAR_INTERVAL_MINUTES", "60")))
+# 高インパクト指標の前後何分をブロックするか
+NEWS_EVENT_BLOCK_MINUTES = max(0, int(os.getenv("NEWS_EVENT_BLOCK_MINUTES", "30")))
+
+# gpt-5-nano 突発ニュースポーリング
+NEWS_MONITOR_ENABLED = os.getenv("NEWS_MONITOR_ENABLED", "true").lower() == "true"
+# ポーリング間隔 (分) — 短すぎるとAPIコストが増えるため最低15分
+NEWS_MONITOR_INTERVAL_MINUTES = max(15, int(os.getenv("NEWS_MONITOR_INTERVAL_MINUTES", "30")))
+# ニュース確認に使うモデル (nanoで十分)
+NEWS_MONITOR_MODEL = os.getenv("NEWS_MONITOR_MODEL", "gpt-5-nano")
+# キャッシュ有効期限 (分) — ポーリング間隔より少し長めに設定
+NEWS_CACHE_EXPIRE_MINUTES = max(15, int(os.getenv("NEWS_CACHE_EXPIRE_MINUTES", "45")))
+# MEDIUMリスクもエントリーブロックするか (デフォルト=False でHIGHのみブロック)
+NEWS_BLOCK_ON_MEDIUM = os.getenv("NEWS_BLOCK_ON_MEDIUM", "false").lower() == "true"
 
 # ──────────────────────────────────────
 # チャート画像設定
