@@ -326,10 +326,29 @@ def _timeframe_to_minutes(timeframe: str) -> int:
 
 def _should_flatten_before_market_close(now: datetime | None = None) -> str | None:
     """市場クローズ前の持ち越し回避ウィンドウなら理由を返す。"""
+    current = now or datetime.now()
+
+    # 週末持ち越し回避: 指定曜日(金曜=4)のクローズ前に優先して手仕舞い
+    if config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED and current.weekday() == config.FLAT_BEFORE_WEEKEND_CLOSE_WEEKDAY:
+        weekend_close_dt = current.replace(
+            hour=config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR,
+            minute=config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        weekend_minutes_to_close = (weekend_close_dt - current).total_seconds() / 60
+        weekend_lead = config.FLAT_BEFORE_WEEKEND_CLOSE_LEAD_MINUTES
+        if 0 <= weekend_minutes_to_close <= weekend_lead:
+            return (
+                f"週末クローズ前の持ち越し回避: クローズまで{weekend_minutes_to_close:.0f}分 "
+                f"(weekday={config.FLAT_BEFORE_WEEKEND_CLOSE_WEEKDAY}, "
+                f"設定 {config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR:02d}:{config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE:02d}, "
+                f"lead={weekend_lead}分)"
+            )
+
     if not config.FLAT_BEFORE_MARKET_CLOSE_ENABLED:
         return None
 
-    current = now or datetime.now()
     close_dt = current.replace(
         hour=config.FLAT_BEFORE_MARKET_CLOSE_HOUR,
         minute=config.FLAT_BEFORE_MARKET_CLOSE_MINUTE,
@@ -391,6 +410,52 @@ def _check_entry(symbol: str):
                 return
         except ValueError:
             pass
+
+    tf_minutes = _timeframe_to_minutes(config.EXECUTION_TF)
+
+    # 同銘柄クールダウン（全Exit理由対象）
+    if config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_ENABLED:
+        recent_closed = trade_logger.get_recent_closed_trade(symbol)
+        closed_at = recent_closed.get("closed_at") if recent_closed else None
+        if closed_at:
+            try:
+                last_closed_dt = _as_utc(datetime.fromisoformat(closed_at))
+                elapsed_min = (datetime.now(UTC) - last_closed_dt).total_seconds() / 60
+                block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS
+                if elapsed_min < block_minutes:
+                    logger.warning(
+                        "[Entry] %s: 同銘柄クールダウン中(全Exit) %.0f/%.0f min (%d bars, reason=%s) → スキップ",
+                        symbol,
+                        elapsed_min,
+                        block_minutes,
+                        config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS,
+                        recent_closed.get("exit_reason", "UNKNOWN"),
+                    )
+                    return
+            except ValueError:
+                pass
+
+    # 勝ちトレード後の再エントリー抑制
+    if config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_ENABLED:
+        recent_win = trade_logger.get_recent_winning_closed_trade(symbol)
+        win_closed_at = recent_win.get("closed_at") if recent_win else None
+        if win_closed_at:
+            try:
+                last_win_dt = _as_utc(datetime.fromisoformat(win_closed_at))
+                elapsed_min = (datetime.now(UTC) - last_win_dt).total_seconds() / 60
+                block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS
+                if elapsed_min < block_minutes:
+                    logger.warning(
+                        "[Entry] %s: 勝ち後クールダウン中 %.0f/%.0f min (%d bars, profit=%.0f) → スキップ",
+                        symbol,
+                        elapsed_min,
+                        block_minutes,
+                        config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS,
+                        float(recent_win.get("result_profit") or 0),
+                    )
+                    return
+            except ValueError:
+                pass
 
     # ニュース・経済カレンダーチェック (キャッシュ参照のみ、API呼び出しなし)
     news_blocked, news_reason = news_monitor.check_entry_news_block(symbol)

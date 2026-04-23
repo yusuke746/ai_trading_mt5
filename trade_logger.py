@@ -225,6 +225,43 @@ def get_recent_premise_break_exit(symbol: str, direction: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_recent_closed_trade(symbol: str) -> dict | None:
+    """同一銘柄の直近クローズ済みトレードを返す。"""
+    with _get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT closed_at, exit_reason, result_profit, direction
+            FROM trades
+            WHERE symbol = ?
+              AND status = 'CLOSED'
+              AND closed_at IS NOT NULL
+            ORDER BY datetime(closed_at) DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_recent_winning_closed_trade(symbol: str) -> dict | None:
+    """同一銘柄の直近勝ちトレード (result_profit>0) を返す。"""
+    with _get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT closed_at, exit_reason, result_profit, direction
+            FROM trades
+            WHERE symbol = ?
+              AND status = 'CLOSED'
+              AND closed_at IS NOT NULL
+              AND result_profit > 0
+            ORDER BY datetime(closed_at) DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def update_trade_sl_by_ticket(mt5_ticket: int, sl_price: float):
     with _get_conn() as conn:
         conn.execute(
