@@ -132,6 +132,8 @@ FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").l
 MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))
 EXIT_EARLY_WINDOW_MINUTES = int(os.getenv("EXIT_EARLY_WINDOW_MINUTES", "30"))
 EXIT_MIN_CONFIDENCE_EARLY = int(os.getenv("EXIT_MIN_CONFIDENCE_EARLY", "65"))
+# 価格変化がこの%未満ならExit AIチェックをスキップ (0.0 で常時実行)
+EXIT_AI_SKIP_MIN_MOVE_PCT = float(os.getenv("EXIT_AI_SKIP_MIN_MOVE_PCT", "0.08"))
 
 # ──────────────────────────────────────
 # SMC (Smart Money Concepts) フィルタ設定
@@ -194,6 +196,32 @@ NEWS_MONITOR_MODEL = os.getenv("NEWS_MONITOR_MODEL", "gpt-5-nano")
 NEWS_CACHE_EXPIRE_MINUTES = max(15, int(os.getenv("NEWS_CACHE_EXPIRE_MINUTES", "45")))
 # MEDIUMリスクもエントリーブロックするか (デフォルト=False でHIGHのみブロック)
 NEWS_BLOCK_ON_MEDIUM = os.getenv("NEWS_BLOCK_ON_MEDIUM", "false").lower() == "true"
+
+# ──────────────────────────────────────
+# Finnhub ニュースAPI
+# ──────────────────────────────────────
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+# Finnhubキーワードスコアがこの値以上の場合のみ gpt-5-nano で詳細判断 (0=常にAI, 大=AI呼び出し激減)
+NEWS_AI_ESCALATION_SCORE = max(0, int(os.getenv("NEWS_AI_ESCALATION_SCORE", "6")))
+
+# ──────────────────────────────────────
+# 市場ストレス検知 (スプレッド/ATR急変)
+# ──────────────────────────────────────
+# スプレッドが平常時の何倍以上でストレス検知してエントリーブロックするか
+MARKET_STRESS_SPREAD_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_RATIO", "3.0"))
+# スプレッドがこの倍率以上 かつ GPTがHIGH → 既存ポジションもクローズ (より高い閾値)
+MARKET_STRESS_SPREAD_CLOSE_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_CLOSE_RATIO", "5.0"))
+# ATRが直近20本平均の何倍以上でストレス検知するか
+MARKET_STRESS_ATR_RATIO    = float(os.getenv("MARKET_STRESS_ATR_RATIO", "2.5"))
+# ストレス検知後に gpt-5-nano を呼び出すか (False=固定TTLのみ)
+MARKET_STRESS_AI_ENABLED   = os.getenv("MARKET_STRESS_AI_ENABLED", "true").lower() == "true"
+# GPTが提案するhold_minutesの最小・最大クランプ (分)
+MARKET_STRESS_HOLD_MIN_MIN = int(os.getenv("MARKET_STRESS_HOLD_MIN_MIN", "10"))  # 30→10分に短縮
+MARKET_STRESS_HOLD_MAX_MIN = int(os.getenv("MARKET_STRESS_HOLD_MAX_MIN", "480"))
+# スプレッドが平常比 1.5 倍未満に戻ったら解除条件を満たすとみなす
+MARKET_STRESS_SPREAD_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_CLEAR_RATIO", "1.5"))
+# 平常スプレッドのベースライン計算に使う過去サンプル数 (銘柄ごと)
+MARKET_STRESS_SPREAD_BASELINE_N = int(os.getenv("MARKET_STRESS_SPREAD_BASELINE_N", "50"))
 
 # ──────────────────────────────────────
 # チャート画像設定

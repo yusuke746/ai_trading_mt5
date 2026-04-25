@@ -24,6 +24,7 @@ import discord_notifier
 import trade_logger
 import adaptive_params
 import news_monitor
+import market_stress
 
 # ── ログ設定 ────────────────────────────
 
@@ -39,6 +40,9 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# チケットごとの「前回AIチェック時価格」キャッシュ (Exit AI コスト削減用)
+_exit_price_cache: dict[int, float] = {}
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -162,6 +166,14 @@ def main():
                 last_db_maintenance = now
                 if do_full_vacuum:
                     last_full_vacuum = now
+
+            # ── 土日: ポジションなし時は5分スリープで空回り削減 ──
+            if now.weekday() in (5, 6):
+                has_positions = bool(mt5_connector.get_positions())
+                if not has_positions:
+                    time.sleep(300)
+                    continue
+                # 週末跨ぎポジションあり: 市場再開検知のため通常サイクル継続
 
             # ── 15分足確定タイミング (00, 15, 30, 45分) ──
             if now.minute % 15 == 0 and now.minute != last_cycle_minute:
@@ -412,6 +424,26 @@ def _should_flatten_before_market_close(now: datetime | None = None) -> str | No
 
 # ── エントリーチェック ──────────────────
 
+def _is_weekend_entry_blocked() -> bool:
+    """金曜クローズ後〜月曜市場再開前はエントリー禁止か判定する。"""
+    if not config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED:
+        return False
+    now = datetime.now()
+    wd = now.weekday()
+    if wd in (5, 6):  # 土・日
+        return True
+    if wd == 4:  # 金曜: クローズ時刻を過ぎていたらブロック
+        close_dt = now.replace(
+            hour=config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR,
+            minute=config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        if now >= close_dt:
+            return True
+    return False
+
+
 def _check_entry(symbol: str):
     """1銘柄のエントリー判断"""
 
@@ -419,6 +451,11 @@ def _check_entry(symbol: str):
     positions = mt5_connector.get_positions(symbol)
     if positions:
         logger.info("[Entry] %s: ポジション保有中 → スキップ", symbol)
+        return
+
+    # 週末クローズ後はエントリー禁止 (ギャップリスク)
+    if _is_weekend_entry_blocked():
+        logger.info("[Entry] %s: 週末クローズ中 → エントリーブロック", symbol)
         return
 
     if not mt5_connector.is_symbol_market_active(symbol):
@@ -505,6 +542,14 @@ def _check_entry(symbol: str):
         discord_notifier.send_skip(symbol, news_reason, notify=False)
         return
 
+    # 市場ストレス検知チェック (スプレッド/ATR急変 → 既にストレス状態)
+    if market_stress.is_stressed(symbol):
+        st = market_stress.get_stress_state(symbol)
+        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.strftime('%H:%M UTC')})"
+        logger.info("[Entry] %s: 市場ストレス状態 → エントリーブロック (%s)", symbol, reason)
+        discord_notifier.send_skip(symbol, reason, notify=False)
+        return
+
     # レートデータ取得
     df_h1 = mt5_connector.get_rates(symbol, config.TREND_TF, config.CHART_BARS + 30)
     df_m15 = mt5_connector.get_rates(symbol, config.EXECUTION_TF, config.CHART_BARS + 30)
@@ -516,6 +561,29 @@ def _check_entry(symbol: str):
     atr_h1 = mt5_connector.calculate_atr(df_h1, config.ATR_PERIOD)
     atr_m15 = mt5_connector.calculate_atr(df_m15, config.ATR_PERIOD)
     ma20 = mt5_connector.calculate_ma(df_m15, config.MA_PERIOD)
+
+    # 市場ストレス検知 (スプレッド/ATR急変) — エントリー前に計測・更新
+    sym_info_stress = mt5_connector.get_symbol_info(symbol)
+    if sym_info_stress:
+        current_spread = float(sym_info_stress.get("spread", 0))
+        # H1 ATR の過去20本平均をベースラインとして使用
+        atr_series = mt5_connector.calculate_atr(df_h1, config.ATR_PERIOD)
+        # pandas Series の場合は最後の N 要素平均を使う
+        try:
+            baseline_atr_val = float(atr_series.iloc[-20:].mean()) if hasattr(atr_series, "iloc") else None
+        except Exception:
+            baseline_atr_val = None
+        stress = market_stress.check_and_update(
+            symbol=symbol,
+            current_spread=current_spread,
+            current_atr=atr_h1,
+            baseline_atr=baseline_atr_val,
+        )
+        if stress:
+            reason = f"[MarketStress] {stress.risk_level}: {stress.summary} (hold_until={stress.hold_until.strftime('%H:%M UTC')})"
+            logger.warning("[Entry] %s: 市場ストレス新規検知 → エントリーブロック (%s)", symbol, reason)
+            discord_notifier.send_skip(symbol, reason, notify=True)
+            return
 
     # 基本チェック用の指標を取得
     current_close = df_m15["close"].iloc[-1]
@@ -835,6 +903,15 @@ def _check_single_exit(pos: dict):
             )
         return
 
+    # 市場ストレス (スプレッド/ATR急変) 検知中: クローズ閾値を超えた時のみ即クローズ
+    stress = market_stress.get_stress_state(symbol)
+    if stress and stress.should_close_positions:
+        reason = f"[MarketStress-CLOSE] {stress.summary} (spread={stress.spread_at_trigger:.1f} ×{config.MARKET_STRESS_SPREAD_CLOSE_RATIO:.0f}以上)"
+        logger.warning("[Exit MarketStress] %s ticket=%s: %s", symbol, ticket, reason)
+        discord_notifier.send_skip(symbol, f"[緊急] {reason}", notify=True)
+        _execute_exit(pos, reason, action_type="EXIT_MARKET_STRESS")
+        return
+
     if not mt5_connector.is_symbol_market_active(symbol):
         logger.info("[Exit] %s ticket=%s: 市場クローズ/気配停止中 → AI判定スキップ", symbol, ticket)
         return
@@ -863,6 +940,19 @@ def _check_single_exit(pos: dict):
 
     # 保有時間計算
     hold_minutes = _calculate_hold_minutes(pos, trade)
+
+    # ── Exit AI コスト削減: 価格がほぼ動いていないサイクルはスキップ ──
+    current_price = pos["price_current"]
+    prev_price = _exit_price_cache.get(ticket)
+    if prev_price is not None:
+        price_move_pct = abs(current_price - prev_price) / prev_price * 100
+        if price_move_pct < config.EXIT_AI_SKIP_MIN_MOVE_PCT:
+            logger.info(
+                "[Exit] %s ticket=%s: 価格変化微小 (%.4f%% < %.4f%%) → AIスキップ",
+                symbol, ticket, price_move_pct, config.EXIT_AI_SKIP_MIN_MOVE_PCT,
+            )
+            return
+    _exit_price_cache[ticket] = current_price
 
     # AI 分析
     signal = ai_analyzer.analyze_exit(
