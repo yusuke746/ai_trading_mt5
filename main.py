@@ -88,6 +88,28 @@ def _calculate_hold_minutes(pos: dict, trade: dict | None) -> int:
 
 # ── メインループ ────────────────────────
 
+def _startup_weekend_check():
+    """起動時に週末跨ぎポジションが存在する場合、CRITICALログ+Discord通知を出す。"""
+    now = datetime.now()
+    wd = now.weekday()
+    if wd not in (5, 6, 0):  # 土・日・月以外はスキップ
+        return
+    positions = mt5_connector.get_positions()
+    if not positions:
+        return
+    symbols_with_holdover = [
+        p["symbol"] for p in positions if _is_weekend_holdover(p)
+    ]
+    if not symbols_with_holdover:
+        return
+    msg = (
+        f"[警告] 週末跨ぎポジション検出: {symbols_with_holdover} "
+        f"| 市場再開後サイクルで即手仕舞いします"
+    )
+    logger.critical(msg)
+    discord_notifier.send_skip("SYSTEM", msg, notify=True)
+
+
 def main():
     logger.info("=" * 60)
     logger.info("AI Trading System 起動")
@@ -113,6 +135,9 @@ def main():
             account["balance"], account["equity"],
             len(mt5_connector.get_positions()),
         )
+
+    # 起動時週末跨ぎポジションチェック
+    _startup_weekend_check()
 
     last_heartbeat = datetime.now()
     last_db_maintenance = datetime.now()
@@ -322,6 +347,22 @@ def _timeframe_to_minutes(timeframe: str) -> int:
     if unit == "D":
         return value * 1440
     return 15
+
+
+def _is_weekend_holdover(pos: dict) -> bool:
+    """週末を跨いで保有されているポジションか判定する。
+    土曜・日曜: 常にTrue
+    月曜: ポジション開始が金曜以前ならTrue
+    """
+    now = datetime.now()
+    wd = now.weekday()
+    if wd in (5, 6):  # 土曜・日曜
+        return True
+    if wd == 0:  # 月曜
+        open_time = datetime.fromtimestamp(pos.get("time", 0))
+        if open_time.weekday() >= 4:  # 金曜(4)以前に開始
+            return True
+    return False
 
 
 def _should_flatten_before_market_close(now: datetime | None = None) -> str | None:
@@ -778,6 +819,20 @@ def _check_single_exit(pos: dict):
             close_window_reason,
         )
         _execute_exit(pos, close_window_reason, action_type="EXIT_SESSION_CLOSE")
+        return
+
+    # 週末跨ぎポジション: 市場が開いたら即クローズ (ギャップリスク回避)
+    if config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED and _is_weekend_holdover(pos):
+        if mt5_connector.is_symbol_market_active(symbol):
+            reason = "週末跨ぎポジション: 市場再開後の即手仕舞い (ギャップリスク回避)"
+            logger.warning("[Exit WeekendHoldover] %s ticket=%s: %s", symbol, ticket, reason)
+            discord_notifier.send_skip(symbol, f"[緊急] {reason}", notify=True)
+            _execute_exit(pos, reason, action_type="EXIT_WEEKEND_HOLDOVER")
+        else:
+            logger.warning(
+                "[Exit] %s ticket=%s: 週末跨ぎポジション保有中 (市場クローズ中 - 再開待機)",
+                symbol, ticket,
+            )
         return
 
     if not mt5_connector.is_symbol_market_active(symbol):
