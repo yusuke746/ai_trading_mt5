@@ -144,13 +144,31 @@ def generate_smc_chart_base64(
     ohlc = ohlc.tail(bars)
 
     smc = smc_features or {}
+    current_close = float(ohlc["Close"].iloc[-1])
+
+    def _pick_near_levels(levels: list, max_count: int) -> list[float]:
+        """現在価格に近いレベルを優先して上位N本だけ返す。"""
+        cleaned: list[float] = []
+        seen: set[float] = set()
+        for lv in levels or []:
+            try:
+                f = float(lv)
+            except (TypeError, ValueError):
+                continue
+            key = round(f, 6)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(f)
+        cleaned.sort(key=lambda x: abs(x - current_close))
+        return cleaned[:max_count]
 
     # ── addplot リスト構築 ──────────────────────
     add_plots = []
 
     # MA20
     ma_series = ohlc["Close"].rolling(config.MA_PERIOD).mean()
-    add_plots.append(mpf.make_addplot(ma_series, color="royalblue", width=1.2, label="MA20"))
+    add_plots.append(mpf.make_addplot(ma_series, color="black", width=1.2, label="MA20"))
 
     # BOS水平線: 各レベルをパネルに重ねる (mplfinanceのhlines引数で描画)
     bos_levels: list[float] = smc.get("bos_levels", [])
@@ -186,13 +204,19 @@ def generate_smc_chart_base64(
         hlines_widths.append(1.2)
 
     # Buy-side / Sell-side Liquidity: 点線
-    for lvl in smc.get("buy_liquidity", []):
+    for lvl in _pick_near_levels(
+        smc.get("buy_liquidity", []),
+        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
+    ):
         hlines_prices.append(float(lvl))
         hlines_colors.append("deepskyblue")
         hlines_styles.append("dotted")
         hlines_widths.append(1.0)
 
-    for lvl in smc.get("sell_liquidity", []):
+    for lvl in _pick_near_levels(
+        smc.get("sell_liquidity", []),
+        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
+    ):
         hlines_prices.append(float(lvl))
         hlines_colors.append("firebrick")
         hlines_styles.append("dotted")
@@ -209,13 +233,19 @@ def generate_smc_chart_base64(
             line_labels.append((float(val), key.upper(), color))
 
     # スウィング高値/安値: 紫の点線
-    for lvl in smc.get("swing_highs", []):
+    for lvl in _pick_near_levels(
+        smc.get("swing_highs", []),
+        config.SMC_DRAW_MAX_SWING_PER_SIDE,
+    ):
         hlines_prices.append(float(lvl))
         hlines_colors.append("mediumpurple")
         hlines_styles.append("dotted")
         hlines_widths.append(0.9)
 
-    for lvl in smc.get("swing_lows", []):
+    for lvl in _pick_near_levels(
+        smc.get("swing_lows", []),
+        config.SMC_DRAW_MAX_SWING_PER_SIDE,
+    ):
         hlines_prices.append(float(lvl))
         hlines_colors.append("mediumpurple")
         hlines_styles.append("dotted")
@@ -319,6 +349,7 @@ def generate_smc_chart_base64(
     # ── 凡例: 線種/色の意味を画像内に明示 ──
     legend_handles = [
         Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid", label="BOS"),
+        Line2D([0], [0], color="black", lw=1.2, ls="solid", label="MA20"),
         Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH"),
         Line2D([0], [0], color="deepskyblue", lw=1.0, ls="dotted", label="Liquidity (Buy-side)"),
         Line2D([0], [0], color="firebrick", lw=1.0, ls="dotted", label="Liquidity (Sell-side)"),
