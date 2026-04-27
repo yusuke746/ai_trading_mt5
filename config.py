@@ -134,6 +134,14 @@ EXIT_EARLY_WINDOW_MINUTES = int(os.getenv("EXIT_EARLY_WINDOW_MINUTES", "30"))
 EXIT_MIN_CONFIDENCE_EARLY = int(os.getenv("EXIT_MIN_CONFIDENCE_EARLY", "65"))
 # 価格変化がこの%未満ならExit AIチェックをスキップ (0.0 で常時実行)
 EXIT_AI_SKIP_MIN_MOVE_PCT = float(os.getenv("EXIT_AI_SKIP_MIN_MOVE_PCT", "0.08"))
+# 一時的に導入した微小変化強制チェックは廃止 (機械EXIT優先化のため常時無効)
+EXIT_AI_FORCE_CHECK_EVERY_CYCLES = 0
+EXIT_AI_NO_SKIP_WHEN_LOSS = False
+# TP目前の機械利確判定 (AI前に実行)
+EXIT_TP_NEAR_ENABLED = os.getenv("EXIT_TP_NEAR_ENABLED", "true").lower() == "true"
+# TPまでの残距離 <= max(ATR * この倍率, 1R * この倍率) なら「目前」
+EXIT_TP_NEAR_ATR_MULT = float(os.getenv("EXIT_TP_NEAR_ATR_MULT", "0.25"))
+EXIT_TP_NEAR_R_MULT = float(os.getenv("EXIT_TP_NEAR_R_MULT", "0.15"))
 
 # ──────────────────────────────────────
 # SMC (Smart Money Concepts) フィルタ設定
@@ -142,12 +150,12 @@ EXIT_AI_SKIP_MIN_MOVE_PCT = float(os.getenv("EXIT_AI_SKIP_MIN_MOVE_PCT", "0.08")
 SMC_FILTER_ENABLED = os.getenv("SMC_FILTER_ENABLED", "true").lower() == "true"
 # Liquidity Sweepと判定するための最小侵食幅 (ATR比率)
 # 例: 0.3 → 高安値をATRの30%以上超えた場合にSweep認定
-SMC_SWEEP_ATR_MULT = float(os.getenv("SMC_SWEEP_ATR_MULT", "0.3"))
+SMC_SWEEP_ATR_MULT = float(os.getenv("SMC_SWEEP_ATR_MULT", "0.25"))
 # 機械的SMCゲート: AI呼び出し前に数値条件でフィルタリング
 # Falseにすると機械ゲートをスキップしてAIのみで判断
 SMC_MECHANICAL_GATE_ENABLED = os.getenv("SMC_MECHANICAL_GATE_ENABLED", "true").lower() == "true"
 # Sweepを探す遡り期間 (H1バー数)
-SMC_SWEEP_LOOKBACK_BARS = int(os.getenv("SMC_SWEEP_LOOKBACK_BARS", "10"))
+SMC_SWEEP_LOOKBACK_BARS = int(os.getenv("SMC_SWEEP_LOOKBACK_BARS", "12"))
 # 順張り (Continuation BOS) エントリーを有効にする
 SMC_CONTINUATION_ENABLED = os.getenv("SMC_CONTINUATION_ENABLED", "true").lower() == "true"
 # 逆張り (Reversal Sweep) エントリーを有効にする
@@ -158,9 +166,9 @@ SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBAC
 SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.3"))
 # 機械ゲートRR判定の緩和係数 (1.0未満で緩和、0.5〜1.0の範囲推奨)
 try:
-    SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.9"))))
+    SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.75"))))
 except ValueError:
-    SMC_MECHANICAL_RR_RELAX_FACTOR = 0.9
+    SMC_MECHANICAL_RR_RELAX_FACTOR = 0.75
 
 # 市場クローズ時の無駄なAI判定を防ぐため、ティックが古い銘柄は停止中とみなす
 MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))

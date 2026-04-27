@@ -371,7 +371,29 @@ def _is_weekend_holdover(pos: dict) -> bool:
     if wd in (5, 6):  # 土曜・日曜
         return True
     if wd == 0:  # 月曜
-        open_time = datetime.fromtimestamp(pos.get("time", 0))
+        open_time_raw = pos.get("time")
+        open_time: datetime | None = None
+
+        if isinstance(open_time_raw, datetime):
+            open_time = open_time_raw
+        elif isinstance(open_time_raw, (int, float)):
+            try:
+                # MT5実装差異でms epochが来る場合に備えて補正
+                ts = float(open_time_raw)
+                if ts > 10_000_000_000:
+                    ts /= 1000.0
+                open_time = datetime.fromtimestamp(ts)
+            except (OverflowError, OSError, ValueError):
+                open_time = None
+
+        if open_time is None:
+            logger.warning(
+                "[Exit WeekendHoldover] ticket=%s: open time解析失敗 (%r) → 保守的に週末跨ぎ扱い",
+                pos.get("ticket"),
+                open_time_raw,
+            )
+            return True
+
         if open_time.weekday() >= 4:  # 金曜(4)以前に開始
             return True
     return False
@@ -941,10 +963,22 @@ def _check_single_exit(pos: dict):
     # 保有時間計算
     hold_minutes = _calculate_hold_minutes(pos, trade)
 
-    # ── Exit AI コスト削減: 価格がほぼ動いていないサイクルはスキップ ──
+    # ── 機械EXIT優先: AI前に確定条件を評価 ──
+    should_exit_mech, mech_reason, mech_action = _evaluate_mechanical_exit(
+        pos=pos,
+        trade=trade,
+        hold_minutes=hold_minutes,
+        invalidation_price=invalidation_price,
+    )
+    if should_exit_mech:
+        logger.warning("[Exit Mechanical] %s ticket=%s: %s", symbol, ticket, mech_reason)
+        _execute_exit(pos, mech_reason, action_type=mech_action)
+        return
+
+    # ── Exit AI コスト制御: 微小変化時のみスキップ ──
     current_price = pos["price_current"]
     prev_price = _exit_price_cache.get(ticket)
-    if prev_price is not None:
+    if prev_price is not None and prev_price > 0:
         price_move_pct = abs(current_price - prev_price) / prev_price * 100
         if price_move_pct < config.EXIT_AI_SKIP_MIN_MOVE_PCT:
             logger.info(
@@ -985,7 +1019,11 @@ def _check_single_exit(pos: dict):
         signal.reasoning[:100],
     )
 
-    if config.FORCE_EXIT_ON_PREMISE_BREAK and not signal.entry_premise_valid:
+    if (
+        config.FORCE_EXIT_ON_PREMISE_BREAK
+        and invalidation_price is None
+        and not signal.entry_premise_valid
+    ):
         if hold_minutes < config.MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK:
             logger.info(
                 "[Exit] %s ticket=%s: 根拠崩壊だが保有時間不足 (%d < %d min) → 監視継続",
@@ -1025,6 +1063,113 @@ def _check_single_exit(pos: dict):
             symbol, ticket, emergency_reason,
         )
         _execute_exit(pos, emergency_reason, action_type="EXIT_EMERGENCY")
+
+
+def _evaluate_mechanical_exit(
+    pos: dict,
+    trade: dict | None,
+    hold_minutes: int,
+    invalidation_price: float | None,
+) -> tuple[bool, str, str]:
+    """AI前に適用する機械的なEXIT判定。"""
+    symbol = pos["symbol"]
+    direction = str(pos["type"]).upper()
+    current_price = float(pos.get("price_current") or 0)
+
+    # 1) 構造崩壊: 無効化ラインを「確定足終値」でブレイク
+    if invalidation_price is not None:
+        close_price = _get_latest_confirmed_close(symbol, config.EXIT_MONITOR_TF)
+        if close_price is not None:
+            breached = (
+                (direction == "BUY" and close_price < invalidation_price)
+                or (direction == "SELL" and close_price > invalidation_price)
+            )
+            if breached:
+                if hold_minutes < config.MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK:
+                    return (
+                        False,
+                        (
+                            f"構造崩壊シグナルは検出(close={close_price:.5f}, inv={invalidation_price:.5f})"
+                            f"だが保有時間不足({hold_minutes}<{config.MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK}分)"
+                        ),
+                        "",
+                    )
+                return (
+                    True,
+                    (
+                        f"無効化ライン終値ブレイクで構造崩壊: close={close_price:.5f}, "
+                        f"invalidation={invalidation_price:.5f}"
+                    ),
+                    "EXIT_PREMISE_BREAK_MECH",
+                )
+
+    # 2) TP到達は即利確
+    tp_price_raw = (trade.get("tp_price") if trade else None)
+    if tp_price_raw is None:
+        tp_price_raw = pos.get("tp")
+    try:
+        tp_price = float(tp_price_raw) if tp_price_raw is not None else None
+    except (TypeError, ValueError):
+        tp_price = None
+
+    if tp_price is not None:
+        tp_hit = (direction == "BUY" and current_price >= tp_price) or (
+            direction == "SELL" and current_price <= tp_price
+        )
+        if tp_hit:
+            return (
+                True,
+                f"TP到達による機械利確: current={current_price:.5f} tp={tp_price:.5f}",
+                "EXIT_TP_HIT_MECH",
+            )
+
+    # 3) TP目前 + 反転シグナルで先行利確
+    if config.EXIT_TP_NEAR_ENABLED and tp_price is not None:
+        entry_price = float(pos.get("price_open") or 0)
+        df = mt5_connector.get_rates(symbol, config.EXIT_MONITOR_TF, max(config.MA_PERIOD + 5, 40))
+        if df is not None and len(df) >= config.MA_PERIOD + 3:
+            atr = float(mt5_connector.calculate_atr(df, config.ATR_PERIOD))
+            r_dist = abs(tp_price - entry_price)
+            near_dist = max(atr * config.EXIT_TP_NEAR_ATR_MULT, r_dist * config.EXIT_TP_NEAR_R_MULT)
+            tp_near = (
+                (direction == "BUY" and (tp_price - current_price) <= near_dist)
+                or (direction == "SELL" and (current_price - tp_price) <= near_dist)
+            )
+
+            o = df["open"]
+            c = df["close"]
+            ma20 = mt5_connector.calculate_ma(df, config.MA_PERIOD)
+            last_open = float(o.iloc[-2])
+            last_close = float(c.iloc[-2])
+            last_ma = float(ma20.iloc[-2])
+
+            reversal = (
+                (direction == "BUY" and last_close < last_open and last_close < last_ma)
+                or (direction == "SELL" and last_close > last_open and last_close > last_ma)
+            )
+            if tp_near and reversal:
+                return (
+                    True,
+                    (
+                        f"TP目前で反転確認により機械利確: current={current_price:.5f}, "
+                        f"tp={tp_price:.5f}, near_dist={near_dist:.5f}"
+                    ),
+                    "EXIT_TP_NEAR_REVERSAL_MECH",
+                )
+
+    return False, "", ""
+
+
+def _get_latest_confirmed_close(symbol: str, timeframe: str) -> float | None:
+    """最新の確定足終値を返す。取得失敗時はNone。"""
+    df = mt5_connector.get_rates(symbol, timeframe, 5)
+    if df is None or len(df) < 3:
+        return None
+    try:
+        # 末尾[-1]は進行中バーの可能性があるため[-2]を採用
+        return float(df["close"].iloc[-2])
+    except Exception:
+        return None
 
 
 def _manage_profit_protection(pos: dict):

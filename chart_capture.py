@@ -127,6 +127,7 @@ def generate_smc_chart_base64(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    from matplotlib.lines import Line2D
 
     df = mt5_connector.get_rates(symbol, timeframe, bars + config.MA_PERIOD)
     if df is None or len(df) < config.MA_PERIOD + 10:
@@ -167,6 +168,8 @@ def generate_smc_chart_base64(
     hlines_colors: list[str] = []
     hlines_styles: list[str] = []
     hlines_widths: list[float] = []
+    # 主要ラインの右端ラベル用 (price, label, color)
+    line_labels: list[tuple[float, str, str]] = []
 
     # BOS: 青の実線
     for lvl in bos_levels:
@@ -185,13 +188,13 @@ def generate_smc_chart_base64(
     # Buy-side / Sell-side Liquidity: 点線
     for lvl in smc.get("buy_liquidity", []):
         hlines_prices.append(float(lvl))
-        hlines_colors.append("limegreen")
+        hlines_colors.append("deepskyblue")
         hlines_styles.append("dotted")
         hlines_widths.append(1.0)
 
     for lvl in smc.get("sell_liquidity", []):
         hlines_prices.append(float(lvl))
-        hlines_colors.append("red")
+        hlines_colors.append("firebrick")
         hlines_styles.append("dotted")
         hlines_widths.append(1.0)
 
@@ -203,6 +206,7 @@ def generate_smc_chart_base64(
             hlines_colors.append(color)
             hlines_styles.append("dashed")
             hlines_widths.append(1.0)
+            line_labels.append((float(val), key.upper(), color))
 
     # スウィング高値/安値: 紫の点線
     for lvl in smc.get("swing_highs", []):
@@ -223,6 +227,7 @@ def generate_smc_chart_base64(
         hlines_colors.append("crimson")
         hlines_styles.append("solid")
         hlines_widths.append(2.5)
+        line_labels.append((float(invalidation_price), "INV", "crimson"))
 
     hlines_cfg = (
         {
@@ -237,7 +242,7 @@ def generate_smc_chart_base64(
 
     # ── ATR 表示 ──
     atr_val = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
-    title_suffix = f"  【無効化ライン: {invalidation_price}】" if invalidation_price is not None else ""
+    title_suffix = f"  INV={invalidation_price}" if invalidation_price is not None else ""
     title = f"{symbol}  {timeframe}   ATR({config.ATR_PERIOD})={atr_val:.5f}{title_suffix}"
 
     buf = io.BytesIO()
@@ -295,6 +300,45 @@ def generate_smc_chart_base64(
                                  linewidth=0.5)
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
+
+    # ── 主要ライン右端ラベル (PDH/PDL/PWH/PWL/INV) ──
+    x_right = len(ohlc) - 1
+    for price, label, color in line_labels:
+        ax_main.text(
+            x_right + 0.15,
+            price,
+            label,
+            color=color,
+            fontsize=7,
+            va="center",
+            ha="left",
+            bbox=dict(facecolor="white", edgecolor=color, alpha=0.55, boxstyle="round,pad=0.15"),
+            zorder=10,
+        )
+
+    # ── 凡例: 線種/色の意味を画像内に明示 ──
+    legend_handles = [
+        Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid", label="BOS"),
+        Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH"),
+        Line2D([0], [0], color="deepskyblue", lw=1.0, ls="dotted", label="Liquidity (Buy-side)"),
+        Line2D([0], [0], color="firebrick", lw=1.0, ls="dotted", label="Liquidity (Sell-side)"),
+        mpatches.Patch(facecolor=(0.0, 0.78, 0.39), alpha=0.20, label="OB (Bullish)"),
+        mpatches.Patch(facecolor=(0.86, 0.20, 0.20), alpha=0.20, label="OB (Bearish)"),
+        mpatches.Patch(facecolor=(0.0, 0.75, 0.85), alpha=0.18, label="FVG"),
+        Line2D([0], [0], color="gold", lw=1.0, ls="dashed", label="PDH/PDL"),
+        Line2D([0], [0], color="orchid", lw=1.0, ls="dashed", label="PWH/PWL"),
+    ]
+    if invalidation_price is not None:
+        legend_handles.append(
+            Line2D([0], [0], color="crimson", lw=2.5, ls="solid", label="Invalidation")
+        )
+    ax_main.legend(
+        handles=legend_handles,
+        loc="upper left",
+        fontsize=7,
+        framealpha=0.85,
+        facecolor="white",
+    )
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")
     plt.close(fig)

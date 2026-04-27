@@ -296,87 +296,46 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     m15_b64 = chart_capture.chart_to_base64(m15_image)
     safe_hold_minutes = max(0, hold_minutes)
 
-    # 無効化ライン情報のセクション
-    if invalidation_price is not None:
-        invalidation_section = f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【最優先確認事項: 無効化ライン (赤線)】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-チャート画像に【赤い太線】で無効化ラインが引かれています。
-無効化ライン価格: {invalidation_price}
+    # 無効化ラインブレイク判定は main.py 側で機械判定済み。
+    # nano には補助判定(反転シグナル有無)のみを依頼する。
+    inv_text = f"{invalidation_price:.5f}" if invalidation_price is not None else "N/A"
 
-「最新の確定済みローソク足の実体（ヒゲは除外、終値）」がこの赤線を明確にブレイクしているかどうかを
-冷徹に事実確認してください。
+    prompt = f"""あなたはSMCトレードの補助監視AIです。
+この判定は『補助』です。最終判断はシステム側の機械判定が優先されます。
 
-- ブレイク確定 (終値が赤線の反対側にある): entry_premise_valid = false → decision = "EXIT"
-- ブレイク未確認 (ヒゲだけが触れた、または終値はまだ赤線の味方側にある): 下記の追加評価へ進む
-
-重要: 「惜しい」「あと少し」「ほぼブレイク」は「未確認」として扱ってください。
-終値ベースの事実のみで判定してください。
-"""
-    else:
-        invalidation_section = ""
-
-    prompt = f"""あなたはSMCトレードの監視AIです。保有ポジションを冷静・客観的に評価し、
-「構造的に決済すべき根拠があるか」だけを判定してください。感情的な判断は不要です。
+【重要】
+- 無効化ラインの終値ブレイク判定はシステム側で実施済みです。
+- あなたは赤線ブレイク可否を判定しないでください。
+- invalidation_breached は必ず false を返してください。
 
 【ポジション情報】
-- 銘柄: {symbol}
-- 方向: {direction}
-- エントリー価格: {entry_price}
-- 現在価格: {current_price}
-- 含み損益: ¥{unrealized_pnl:,.0f}
-- 保有時間: {safe_hold_minutes}分
-- TP価格: {tp_price if tp_price is not None else '未設定'}
-- 現在SL価格: {current_sl if current_sl is not None else '未設定'}
+- symbol: {symbol}
+- direction: {direction}
+- entry: {entry_price}
+- current: {current_price}
+- pnl_jpy: {unrealized_pnl:,.0f}
+- hold_min: {safe_hold_minutes}
+- tp: {tp_price if tp_price is not None else 'N/A'}
+- sl: {current_sl if current_sl is not None else 'N/A'}
+- invalidation_line: {inv_text}
 
-【エントリー時の判断根拠】
-{entry_reasoning[:600] if entry_reasoning else '記録なし'}
+【entry rationale】
+{entry_reasoning[:300] if entry_reasoning else 'N/A'}
 
-【エントリー時のニュース判断】
-{entry_news_impact[:400] if entry_news_impact else '記録なし'}
+【task】
+M15画像から「TP目前での反転シグナル」が明確かだけ評価してください。
+- 反転シグナルが明確: decision="EXIT"
+- 明確でない: decision="HOLD"
 
-15分足のチャート画像を添付しています。{invalidation_section}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【評価手順】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-■ ステップ1: 無効化ライン確認 (赤線がある場合は最優先)
-  - 最新確定足の「終値」が赤線をブレイクしているか？ (YESなら即EXIT)
-
-■ ステップ2: TP・利益状況の確認
-  - TP（{tp_price if tp_price is not None else '未設定'}）に到達または目前か？
-  - 目前で明確な反転シグナル（長ヒゲ・Engulfinなど）が出ているか？
-
-■ ステップ3: ニュース確認
-    - ニュースは外部モジュール(news_monitor)で別途監視済み。ここではチャート構造と無効化ライン判定を優先する
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【判断基準】
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EXIT条件 (1つ以上が明確):
-  ① 無効化ライン (赤線) を終値でブレイク確定
-  ② TP到達 or TP目前で反転シグナル確認
-    ③ 重要ファンダメンタル前提が崩れた
-
-HOLD条件 (以下をすべて満たす):
-  ① 無効化ラインを終値でブレイクしていない
-    ② TP到達余地あり、明確な反転シグナルが未発生
-  ③ SLを侵食していない (含み損はノイズ範囲)
-
-【回答フォーマット (JSON)】
+【output JSON only】
 {{
     "decision": "HOLD" or "EXIT",
     "confidence": 0-100,
-    "entry_premise_valid": true or false,
-    "invalidation_breached": true or false,
-    "reasoning": "判断理由（赤線ブレイクの有無、終値ベースの事実を含む）",
-    "news_impact": "N/A (news_monitorにて別管理)"
-}}
-
-重要: invalidation_breached が true の場合は entry_premise_valid を false、decision を必ず EXIT にしてください。
-含み損のみ・保有時間短い・SL未到達、これだけでは EXIT にしないでください。
-必ずJSON形式のみで回答してください。"""
+    "entry_premise_valid": true,
+    "invalidation_breached": false,
+    "reasoning": "短く1文で理由",
+    "news_impact": "N/A (news_monitor managed)"
+}}"""
 
     try:
         client = _get_client()
