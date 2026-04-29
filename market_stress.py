@@ -249,23 +249,25 @@ def _ask_gpt_for_stress(
 - 現在スプレッド: {spread_now:.1f} pips (平常時の {ratio:.1f} 倍)
 - 銘柄: {symbol}
 
-この状況はどのくらい続くと予想されますか？
+web検索で現在の {symbol} のスプレッド拡大・市場異常の原因を調べてから判断してください。
+
 JSONのみで回答してください:
 {{
   "risk_level": "HIGH" | "MEDIUM",
   "hold_minutes": <エントリー禁止する推奨時間(整数・分)>,
-  "summary": "状況の1文要約"
+  "summary": "web検索で判明した原因と状況の1文要約"
 }}
 
 判断基準:
-- 経済指標発表直後のスプレッド拡大 → hold_minutes: 30〜60
-- 地政学リスク・市場クラッシュ → hold_minutes: 120〜480
-- 原因不明 → hold_minutes: 60 (保守的に)"""
+- 経済指標発表直後の一時的なスプレッド拡大 → hold_minutes: 15〜30
+- 重要指標・要人発言による高ボラティリティ → hold_minutes: 30〜60
+- 地政学リスク・市場クラッシュ・フラッシュクラッシュ → hold_minutes: 120〜480
+- 週明け早朝など流動性が薄い時間帯のスプレッド拡大 → hold_minutes: 15〜30"""
 
         response = client.responses.create(
             model=config.NEWS_MONITOR_MODEL,
+            tools=[{"type": "web_search_preview"}],
             input=[{"role": "user", "content": prompt}],
-            # web_search_preview なし → コスト最小
         )
         raw = response.output_text
         import re
