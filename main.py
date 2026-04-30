@@ -93,11 +93,9 @@ def _calculate_hold_minutes(pos: dict, trade: dict | None) -> int:
 # ── メインループ ────────────────────────
 
 def _startup_weekend_check():
-    """起動時に週末跨ぎポジションが存在する場合、CRITICALログ+Discord通知を出す。"""
-    now = datetime.now()
-    wd = now.weekday()
-    if wd not in (5, 6, 0):  # 土・日・月以外はスキップ
-        return
+    """起動時に週末クローズ中にポジションが存在する場合、CRITICALログ+Discord通知を出す。"""
+    if mt5_connector.is_fx_market_open():
+        return  # 市場オープン中は不要
     positions = mt5_connector.get_positions()
     if not positions:
         return
@@ -167,8 +165,9 @@ def main():
                 if do_full_vacuum:
                     last_full_vacuum = now
 
-            # ── 土日: ポジションなし時は5分スリープで空回り削減 ──
-            if now.weekday() in (5, 6):
+            # ── 市場クローズ中: ポジションなし時は5分スリープで空回り削減 ──
+            # サーバー時刻(GMT+3)ベースで判定 (JSTベースにするとFX金曜夜を誤ってクローズ扱いする)
+            if not mt5_connector.is_fx_market_open():
                 has_positions = bool(mt5_connector.get_positions())
                 if not has_positions:
                     time.sleep(300)
@@ -203,6 +202,12 @@ def main():
 def _trading_cycle():
     """15分ごとの売買判断サイクル"""
     logger.info("─── Trading Cycle Start ───")
+
+    # 0) MT5自動決済(TP/SL)でDBに孤立したトレードを照合・更新 (クールダウン機能の前提)
+    try:
+        _reconcile_orphaned_db_trades()
+    except Exception as e:
+        logger.error("孤立トレード照合例外: %s", e, exc_info=True)
 
     # 1) 保有ポジションのエグジットチェック
     _check_exits()
@@ -362,68 +367,33 @@ def _timeframe_to_minutes(timeframe: str) -> int:
 
 
 def _is_weekend_holdover(pos: dict) -> bool:
-    """週末を跨いで保有されているポジションか判定する。
-    土曜・日曜: 常にTrue
-    月曜: ポジション開始が金曜以前ならTrue
-    """
-    now = datetime.now()
-    wd = now.weekday()
-    if wd in (5, 6):  # 土曜・日曜
-        return True
-    if wd == 0:  # 月曜
-        open_time_raw = pos.get("time")
-        open_time: datetime | None = None
-
-        if isinstance(open_time_raw, datetime):
-            open_time = open_time_raw
-        elif isinstance(open_time_raw, (int, float)):
-            try:
-                # MT5実装差異でms epochが来る場合に備えて補正
-                ts = float(open_time_raw)
-                if ts > 10_000_000_000:
-                    ts /= 1000.0
-                open_time = datetime.fromtimestamp(ts)
-            except (OverflowError, OSError, ValueError):
-                open_time = None
-
-        if open_time is None:
-            logger.warning(
-                "[Exit WeekendHoldover] ticket=%s: open time解析失敗 (%r) → 保守的に週末跨ぎ扱い",
-                pos.get("ticket"),
-                open_time_raw,
-            )
-            return True
-
-        if open_time.weekday() >= 4:  # 金曜(4)以前に開始
-            return True
-    return False
+    """市場クローズ中に保有されているポジションか判定する (サーバー時刻GMT+3ベース)。"""
+    return not mt5_connector.is_fx_market_open()
 
 
 def _should_flatten_before_market_close(now: datetime | None = None) -> str | None:
-    """市場クローズ前の持ち越し回避ウィンドウなら理由を返す。"""
-    current = now or datetime.now()
+    """市場クローズ前の持ち越し回避ウィンドウなら理由を返す。
+    週末クローズ: XMTradingサーバー時刻(GMT+3)で金曜23:59の lead_minutes 前から手仕舞い。
+    日次クローズ: FXは24/5のため通常無効(FLAT_BEFORE_MARKET_CLOSE_ENABLED=false)。
+    """
+    # ── 週末クローズ前 (サーバー時刻ベース) ──
+    if config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED:
+        minutes_to_close = mt5_connector.get_minutes_to_weekend_close()
+        if minutes_to_close is not None:  # 金曜のみ値が返る
+            lead = config.FLAT_BEFORE_WEEKEND_CLOSE_LEAD_MINUTES
+            if minutes_to_close <= lead:
+                srv = mt5_connector.get_server_datetime()
+                srv_str = srv.strftime('%H:%M') if srv else '??:??'
+                return (
+                    f"週末クローズ前の持ち越し回避: サーバー時刻{srv_str}(GMT+3) "
+                    f"クローズまで{minutes_to_close:.0f}分 (lead={lead}分)"
+                )
 
-    # 週末持ち越し回避: 指定曜日(金曜=4)のクローズ前に優先して手仕舞い
-    if config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED and current.weekday() == config.FLAT_BEFORE_WEEKEND_CLOSE_WEEKDAY:
-        weekend_close_dt = current.replace(
-            hour=config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR,
-            minute=config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE,
-            second=0,
-            microsecond=0,
-        )
-        weekend_minutes_to_close = (weekend_close_dt - current).total_seconds() / 60
-        weekend_lead = config.FLAT_BEFORE_WEEKEND_CLOSE_LEAD_MINUTES
-        if 0 <= weekend_minutes_to_close <= weekend_lead:
-            return (
-                f"週末クローズ前の持ち越し回避: クローズまで{weekend_minutes_to_close:.0f}分 "
-                f"(weekday={config.FLAT_BEFORE_WEEKEND_CLOSE_WEEKDAY}, "
-                f"設定 {config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR:02d}:{config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE:02d}, "
-                f"lead={weekend_lead}分)"
-            )
-
+    # ── 日次クローズ前 (FXは通常無効) ──
     if not config.FLAT_BEFORE_MARKET_CLOSE_ENABLED:
         return None
 
+    current = now or datetime.now()
     close_dt = current.replace(
         hour=config.FLAT_BEFORE_MARKET_CLOSE_HOUR,
         minute=config.FLAT_BEFORE_MARKET_CLOSE_MINUTE,
@@ -432,12 +402,11 @@ def _should_flatten_before_market_close(now: datetime | None = None) -> str | No
     )
     if close_dt <= current:
         close_dt += timedelta(days=1)
-
     minutes_to_close = (close_dt - current).total_seconds() / 60
     lead_minutes = config.FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES
     if 0 <= minutes_to_close <= lead_minutes:
         return (
-            f"市場クローズ前の持ち越し回避: クローズまで{minutes_to_close:.0f}分 "
+            f"日次クローズ前の持ち越し回避: クローズまで{minutes_to_close:.0f}分 "
             f"(設定 {config.FLAT_BEFORE_MARKET_CLOSE_HOUR:02d}:{config.FLAT_BEFORE_MARKET_CLOSE_MINUTE:02d}, "
             f"lead={lead_minutes}分)"
         )
@@ -447,23 +416,10 @@ def _should_flatten_before_market_close(now: datetime | None = None) -> str | No
 # ── エントリーチェック ──────────────────
 
 def _is_weekend_entry_blocked() -> bool:
-    """金曜クローズ後〜月曜市場再開前はエントリー禁止か判定する。"""
+    """FX市場クローズ中はエントリー禁止 (サーバー時刻GMT+3ベース)。"""
     if not config.FLAT_BEFORE_WEEKEND_CLOSE_ENABLED:
         return False
-    now = datetime.now()
-    wd = now.weekday()
-    if wd in (5, 6):  # 土・日
-        return True
-    if wd == 4:  # 金曜: クローズ時刻を過ぎていたらブロック
-        close_dt = now.replace(
-            hour=config.FLAT_BEFORE_WEEKEND_CLOSE_HOUR,
-            minute=config.FLAT_BEFORE_WEEKEND_CLOSE_MINUTE,
-            second=0,
-            microsecond=0,
-        )
-        if now >= close_dt:
-            return True
-    return False
+    return not mt5_connector.is_fx_market_open()
 
 
 def _check_entry(symbol: str):
@@ -867,6 +823,63 @@ def _check_entry(symbol: str):
         "[Entry] 発注完了: %s %s lot=%.2f entry=%.5f sl=%.5f tp=%.5f ticket=%s",
         symbol, direction, lot, entry_price, sl_price, tp_price, ticket,
     )
+
+
+# ── 孤立トレード照合 ───────────────────
+
+def _reconcile_orphaned_db_trades():
+    """DBでOPENのままだがMT5に存在しないトレードをMT5履歴で照合してCLOSEDに更新する。
+    MT5のTP/SL自動決済がボットのサイクル間に起きた場合でもクールダウンが正しく機能するようにする。
+    """
+    db_open_trades = trade_logger.get_open_trades()
+    if not db_open_trades:
+        return
+
+    mt5_open_tickets = {p["ticket"] for p in mt5_connector.get_positions()}
+
+    for trade in db_open_trades:
+        ticket = trade.get("mt5_ticket")
+        if ticket is None:
+            continue
+        if ticket in mt5_open_tickets:
+            continue  # MT5にまだ存在 → 正常
+
+        # MT5にないがDBはOPEN → 履歴から決済情報を取得
+        deal_info = mt5_connector.get_closed_deal_by_ticket(ticket)
+        if deal_info:
+            exit_price  = deal_info["exit_price"]
+            exit_profit = deal_info["profit"]
+            exit_reason = deal_info["exit_reason"]
+            closed_at   = deal_info["closed_at"]
+        else:
+            # 履歴も取得できない場合は最低限クローズとして記録
+            exit_price  = 0.0
+            exit_profit = 0.0
+            exit_reason = "UNKNOWN_AUTO_CLOSE"
+            closed_at   = None  # close_trade内でutcnow()が使われる
+
+        trade_logger.close_trade(
+            trade_id=trade["id"],
+            exit_price=exit_price,
+            result_pips=0,
+            result_profit=exit_profit,
+            exit_reason=exit_reason,
+        )
+        # closed_at を履歴の実際の時刻で上書き
+        if closed_at:
+            trade_logger.update_trade_closed_at(trade["id"], closed_at)
+
+        logger.warning(
+            "[Reconcile] DB孤立トレードをCLOSEDに更新: symbol=%s ticket=%s exit_reason=%s profit=%.0f",
+            trade.get("symbol"), ticket, exit_reason, exit_profit,
+        )
+        discord_notifier.send_exit(
+            symbol=trade.get("symbol", ""),
+            direction=trade.get("direction", ""),
+            exit_price=exit_price,
+            profit=exit_profit,
+            reasoning=f"[Auto-Reconcile] {exit_reason}",
+        )
 
 
 # ── エグジットチェック ──────────────────

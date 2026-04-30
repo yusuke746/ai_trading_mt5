@@ -392,6 +392,55 @@ def get_all_open_symbols() -> list[str]:
     return list({p["symbol"] for p in positions})
 
 
+def get_closed_deal_by_ticket(ticket: int) -> dict | None:
+    """MT5の約定履歴からポジション(ticket)の決済deal情報を返す。
+    TP/SL自動決済を含む全パターンに対応。
+    Returns:
+        {exit_price, profit, closed_at, exit_reason} or None
+    """
+    from datetime import timezone, timedelta
+    # 過去180日分のdealを検索
+    date_from = datetime.utcnow() - timedelta(days=180)
+    date_to   = datetime.utcnow() + timedelta(days=1)
+    deals = mt5.history_deals_get(
+        date_from.replace(tzinfo=timezone.utc),
+        date_to.replace(tzinfo=timezone.utc),
+        position=ticket,
+    )
+    if not deals:
+        return None
+
+    # entry=DEAL_ENTRY_OUT (1) or DEAL_ENTRY_INOUT (2) が決済deal
+    close_deal = None
+    for d in deals:
+        if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT):
+            close_deal = d
+            break
+
+    if close_deal is None:
+        return None
+
+    # 決済理由のマッピング
+    _REASON_MAP = {
+        mt5.DEAL_REASON_TP:     "TP_HIT",
+        mt5.DEAL_REASON_SL:     "SL_HIT",
+        mt5.DEAL_REASON_CLIENT: "MANUAL",
+        mt5.DEAL_REASON_EXPERT: "EA",
+        mt5.DEAL_REASON_MOBILE: "MOBILE",
+        mt5.DEAL_REASON_WEB:    "WEB",
+        mt5.DEAL_REASON_SO:     "STOP_OUT",
+    }
+    exit_reason = _REASON_MAP.get(close_deal.reason, f"MT5_REASON_{close_deal.reason}")
+
+    closed_at = datetime.utcfromtimestamp(close_deal.time).isoformat()
+    return {
+        "exit_price": close_deal.price,
+        "profit":     close_deal.profit,
+        "closed_at":  closed_at,
+        "exit_reason": exit_reason,
+    }
+
+
 def _send_order_with_filling_fallback(request: dict, symbol: str, context: str):
     """IOCで失敗した場合にRETURNで再送する。"""
     result = mt5.order_send(request)
@@ -521,6 +570,55 @@ def modify_position_sl(ticket: int, new_sl: float) -> bool:
 
     logger.info("SL更新成功: ticket=%s new_sl=%.5f", ticket, new_sl)
     return True
+
+
+# ── サーバー時刻・市場開閉判定 ───────────
+
+def get_server_datetime() -> datetime | None:
+    """XMTradingサーバー時刻を返す (GMT+3固定、夏冬不変)。
+    tick.time は UTC UNIX秒なので +3h でサーバー時刻に変換する。
+    """
+    from datetime import timezone, timedelta
+    server_tz = timezone(timedelta(hours=3))
+    for sym in ("EURUSD", "USDJPY", "XAUUSD", "GOLD"):
+        tick = mt5.symbol_info_tick(sym)
+        if tick is not None:
+            utc_dt = datetime.utcfromtimestamp(tick.time).replace(tzinfo=timezone.utc)
+            return utc_dt.astimezone(server_tz)
+    return None
+
+
+def is_fx_market_open() -> bool:
+    """FX市場が開場中かを XMTradingサーバー時刻(GMT+3)で判定する。
+    クローズ期間:
+      - 土曜 00:00〜日曜 22:59 (サーバー時刻)
+      - 金曜 23:59 のクローズ後も含む
+    オープン: 日曜 23:00〜金曜 23:59
+    """
+    srv = get_server_datetime()
+    if srv is None:
+        logger.warning("[MarketHours] サーバー時刻取得失敗 → 保守的にクローズ扱い")
+        return False
+    wd = srv.weekday()
+    if wd == 5:  # 土曜: 終日クローズ
+        return False
+    if wd == 6:  # 日曜: 23:00以降にオープン
+        return srv.hour >= 23
+    if wd == 4:  # 金曜: 23:59でクローズ
+        return not (srv.hour == 23 and srv.minute >= 59)
+    return True  # 月〜木: 終日オープン
+
+
+def get_minutes_to_weekend_close() -> float | None:
+    """金曜のみ: サーバー時刻で週末クローズまでの残り分を返す。
+    金曜以外は None を返す。
+    """
+    srv = get_server_datetime()
+    if srv is None or srv.weekday() != 4:
+        return None
+    close_time = srv.replace(hour=23, minute=59, second=0, microsecond=0)
+    remaining = (close_time - srv).total_seconds() / 60
+    return max(0.0, remaining)
 
 
 # ── USDJPY レート取得 (通貨換算用) ──────

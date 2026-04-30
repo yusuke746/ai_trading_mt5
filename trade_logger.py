@@ -155,12 +155,22 @@ def close_trade(trade_id: int, exit_price: float,
         )
 
 
+def update_trade_closed_at(trade_id: int, closed_at: str):
+    """close_tradeで設定したclosed_atをMT5履歴の実際の時刻で上書きする。"""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE trades SET closed_at = ? WHERE id = ?",
+            (closed_at, trade_id),
+        )
+
+
 def get_open_trades() -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM trades WHERE status = 'OPEN'"
         ).fetchall()
         return [dict(r) for r in rows]
+
 
 
 def get_open_trade_by_ticket(mt5_ticket: int) -> dict | None:
