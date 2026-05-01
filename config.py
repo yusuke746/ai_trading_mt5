@@ -46,14 +46,12 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 # ──────────────────────────────────────
 # 監視銘柄リスト (MT5シンボル名)
-# XMTrading のシンボル名に合わせて変更してください
+# .env の SYMBOLS にカンマ区切りで指定: SYMBOLS=GOLD,USDJPY,EURUSD
 # ──────────────────────────────────────
 SYMBOLS = [
-    "GOLD",       # ゴールド (XAUUSD)
-    "USDJPY",     # ドル円
-    "EURUSD",     # ユロドル
-    "US100Cash",  # NASDAQ100 (XMTradingでの名称)
-    "OILCash",    # WTI原油 (XMTradingでの名称)
+    s.strip()
+    for s in os.getenv("SYMBOLS", "GOLD,USDJPY,EURUSD,US100Cash,OILCash").split(",")
+    if s.strip()
 ]
 
 # ──────────────────────────────────────
