@@ -438,6 +438,7 @@ def get_closed_deal_by_ticket(ticket: int) -> dict | None:
         "profit":     close_deal.profit,
         "closed_at":  closed_at,
         "exit_reason": exit_reason,
+        "symbol":     close_deal.symbol,
     }
 
 
@@ -504,10 +505,13 @@ def place_order(symbol: str, direction: str, lot: float,
         return None
 
     logger.info(
-        "注文成功: %s %s lot=%.2f price=%.5f ticket=%s",
-        symbol, direction, lot, result.price, result.order,
+        "注文成功: %s %s lot=%.2f price=%.5f order=%s deal=%s",
+        symbol, direction, lot, result.price, result.order, result.deal,
     )
-    return result.order
+    # position=フィルタは position_id (広報 = deal ticket) で検索するため、
+    # deal ticket を優先して返す (0 なら order ticket でフォールバック)
+    position_ticket = result.deal if result.deal else result.order
+    return position_ticket
 
 
 def close_position(ticket: int) -> bool:

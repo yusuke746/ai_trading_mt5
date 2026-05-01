@@ -105,10 +105,20 @@ def analyze_entry(symbol: str, current_price: float,
             "REVERSAL_SWEEP":  "逆張り (Liquidity Sweep後の反転)",
             "CONTINUATION_BOS": "順張り (BOS後の押し目/戻し)",
         }.get(_mech_entry_type, "不明")
+        _swept_level = mech_gate.get("swept_level")
+        _structural_sl_dist = mech_gate.get("structural_sl_dist")
+        _swept_line = (
+            f"\n- Sweepされた流動性レベル(Python検出・確定): {_swept_level:.5f}"
+            if _swept_level is not None else ""
+        )
+        _sl_floor_line = (
+            f"\n- 構造的SL幅(Python計算・下限): {_structural_sl_dist:.5f} ← sl_distanceはこれ以上であること"
+            if _structural_sl_dist is not None else ""
+        )
         mech_section = f"""
 【機械判定ゲート (Python計算済み・確定事実)】
 - エントリータイプ: {_mech_entry_type} ({_entry_type_label})
-- Sweep検出: {mech_gate.get('sweep_pass', 'N/A')} (方向: {mech_gate.get('sweep_type', 'N/A')})
+- Sweep検出: {mech_gate.get('sweep_pass', 'N/A')} (方向: {mech_gate.get('sweep_type', 'N/A')}){_swept_line}{_sl_floor_line}
 - BOS/MAトレンド確認: {mech_gate.get('bos_pass', 'N/A')}
 - RR充足 (最低{config.ENTRY_MIN_TP_R:.1f}R以上): {mech_gate.get('rr_pass', 'N/A')}
 """
@@ -169,8 +179,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
     "smc_fvg_present": true or false,
     "reasoning": "判断理由（チャートで確認した構造を簡潔に）",
     "news_impact": "N/A (news_monitorにて別管理)",
-    "sl_distance": SL幅の数値(price単位、Sweep起点または直近スウィング外側),
-    "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上),
+    "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上)。チャートの構造レベル(次のOB/FVG/流動性/PDH/PDL)までの距離。,
     "invalidation_price": このエントリーのSMC構造が完全に崩壊する具体的な価格(数値)
 }}
 

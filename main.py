@@ -228,15 +228,17 @@ def _mechanical_smc_gate(
     atr_h1: float,
     smc_data: dict,
     current_price: float,
-) -> tuple[bool, bool, bool, str, str]:
+) -> tuple[bool, bool, bool, str, str, float | None, float | None]:
     """H1データのみでSMC条件を数値判定する機械ゲート。AI呼び出し前のコスト削減フィルタ。
 
-        Returns: (sweep_pass, bos_pass, rr_pass, sweep_type, entry_type)
+        Returns: (sweep_pass, bos_pass, rr_pass, sweep_type, entry_type, swept_level, structural_sl_dist)
       sweep_type: "HIGH" / "LOW" / "NONE"
             entry_type: "REVERSAL_SWEEP" / "CONTINUATION_BOS" / "NONE"
+          swept_level: スイープされた価格レベル (REVERSAL_SWEEPのみ非None)
+   structural_sl_dist: 構造的SL幅 (RR判定・発注・ロット計算で共通使用)
     """
     if not smc_data or atr_h1 <= 0:
-                return False, False, False, "NONE", "NONE"
+                return False, False, False, "NONE", "NONE", None, None
 
     # キーレベル収集 (PDH/PDL/PWH/PWL + H1スウィング高安値)
     levels: list[float] = []
@@ -250,7 +252,7 @@ def _mechanical_smc_gate(
         levels.append(float(v))
 
     if not levels:
-        return False, False, False, "NONE", "NONE"
+        return False, False, False, "NONE", "NONE", None, None
 
     min_penetration = atr_h1 * config.SMC_SWEEP_ATR_MULT
     lookback = min(config.SMC_SWEEP_LOOKBACK_BARS, len(df_h1) - 1)
@@ -281,10 +283,22 @@ def _mechanical_smc_gate(
     bos_pass = False
     ma = mt5_connector.calculate_ma(df_h1, config.MA_PERIOD)
     ma_clean = ma.dropna()
-    sl_dist = atr_h1 * 1.5
     rr_relax = max(0.5, min(1.0, config.SMC_MECHANICAL_RR_RELAX_FACTOR))
-    min_tp_dist = sl_dist * config.ENTRY_MIN_TP_R * rr_relax
     rr_pass = False
+
+    # 構造的SL距離: REVERSAL_SWEEPはswept_level外側、CONTINUATION_BOSはATR×1.5
+    structural_sl_dist: float | None = None
+    if sweep_pass and swept_level is not None:
+        buffer = atr_h1 * 0.2
+        if sweep_type == "HIGH":
+            raw_dist = (swept_level + buffer) - current_price
+        else:
+            raw_dist = current_price - (swept_level - buffer)
+        # 最低ATR×1.0を確保
+        structural_sl_dist = max(raw_dist, atr_h1 * 1.0) if raw_dist > 0 else atr_h1 * 1.5
+
+    sl_dist = structural_sl_dist if structural_sl_dist is not None else atr_h1 * 1.5
+    min_tp_dist = sl_dist * config.ENTRY_MIN_TP_R * rr_relax
 
     if sweep_pass:
         if len(ma_clean) >= 2:
@@ -307,7 +321,7 @@ def _mechanical_smc_gate(
                 rr_pass = (min(targets) - current_price) >= min_tp_dist
 
         if config.SMC_REVERSAL_ENABLED:
-            return sweep_pass, bos_pass, rr_pass, sweep_type, "REVERSAL_SWEEP"
+            return sweep_pass, bos_pass, rr_pass, sweep_type, "REVERSAL_SWEEP", swept_level, structural_sl_dist
 
     # ── Continuation BOS gate (順張り: BOS後の押し目/戻し) ─────────
     if config.SMC_CONTINUATION_ENABLED and len(ma_clean) >= config.SMC_CONTINUATION_BOS_LOOKBACK_BARS + 1:
@@ -320,18 +334,22 @@ def _mechanical_smc_gate(
                 # 上昇トレンド + 価格がMA付近以下: BUY押し目セットアップ
                 cont_sweep_type = "LOW"
                 bos_pass = True
+                cont_sl_dist = atr_h1 * 1.5
+                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
                 targets = [v for v in levels if v > current_price]
-                rr_pass = bool(targets) and (min(targets) - current_price) >= min_tp_dist
-                return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS"
+                rr_pass = bool(targets) and (min(targets) - current_price) >= cont_min_tp
+                return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS", None, cont_sl_dist
             elif ma_slope < 0 and current_price >= ma_curr - atr_h1 * 0.5:
                 # 下降トレンド + 価格がMA付近以上: SELL戻しセットアップ
                 cont_sweep_type = "HIGH"
                 bos_pass = True
+                cont_sl_dist = atr_h1 * 1.5
+                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
                 targets = [v for v in levels if v < current_price]
-                rr_pass = bool(targets) and (current_price - max(targets)) >= min_tp_dist
-                return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS"
+                rr_pass = bool(targets) and (current_price - max(targets)) >= cont_min_tp
+                return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS", None, cont_sl_dist
 
-    return False, False, False, "NONE", "NONE"
+    return False, False, False, "NONE", "NONE", None, None
 
 
 def _entry_direction_from_mech_gate(sweep_type: str, entry_type: str) -> str | None:
@@ -588,7 +606,7 @@ def _check_entry(symbol: str):
     )
 
     # 機械的SMCゲート (逆張り/順張り両対応)
-    smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type, mech_entry_type = _mechanical_smc_gate(
+    smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type, mech_entry_type, mech_swept_level, mech_structural_sl_dist = _mechanical_smc_gate(
         df_h1, atr_h1, smc_data, current_price
     )
     logger.info(
@@ -684,6 +702,8 @@ def _check_entry(symbol: str):
             "rr_pass":    smc_rr_pass,
             "sweep_type": mech_sweep_type,
             "entry_type": mech_entry_type,
+            "swept_level": mech_swept_level,
+            "structural_sl_dist": mech_structural_sl_dist,
         },
     )
 
@@ -748,30 +768,53 @@ def _check_entry(symbol: str):
     # ── 発注処理 ──
     direction = signal.decision  # "BUY" or "SELL"
 
-    # SL距離: AIの推奨値 or ATR × 1.5
-    sl_distance = signal.sl_distance
-    if sl_distance <= 0:
-        sl_distance = lot_calculator.get_sl_distance(atr_m15)
+    # エントリー価格・桁数取得
+    entry_price = price_info["ask"] if direction == "BUY" else price_info["bid"]
+    sym_info = mt5_connector.get_symbol_info(symbol)
+    digits = sym_info["digits"] if sym_info else 5
 
-    # ロット計算
+    # ─ SL幅の決定プロセス (機械一元管理、AI値は使用しない) ─
+    # REVERSAL_SWEEP: swept_level + spread/ATRバッファで機械的に確定
+    # CONTINUATION_BOS: 機械ゲートのATR×1.5を使用
+
+    if mech_entry_type == "REVERSAL_SWEEP" and mech_swept_level is not None:
+        spread = price_info["ask"] - price_info["bid"]
+        buffer = max(atr_m15 * 0.2, spread * 2)
+        if direction == "SELL":
+            structural_sl = round(mech_swept_level + buffer, digits)
+            structural_sl_dist = structural_sl - entry_price
+        else:
+            structural_sl = round(mech_swept_level - buffer, digits)
+            structural_sl_dist = entry_price - structural_sl
+
+        if structural_sl_dist > 0:
+            sl_distance = structural_sl_dist
+            sl_price = structural_sl
+            logger.info(
+                "[Entry] %s: REVERSAL_SWEEP SL: swept_level=%.5f buffer=%.5f sl_dist=%.5f sl_price=%.5f",
+                symbol, mech_swept_level, buffer, sl_distance, sl_price,
+            )
+        else:
+            # swept_levelがエントリー価格より不利側にある異常はフォールバック
+            sl_distance = mech_structural_sl_dist or lot_calculator.get_sl_distance(atr_m15)
+            sl_price = lot_calculator.calculate_sl_price(
+                symbol=symbol, direction=direction,
+                entry_price=entry_price, atr=sl_distance, multiplier=1.0,
+            )
+    else:
+        # CONTINUATION_BOS: ATR×1.5（機械ゲート一元）
+        sl_distance = mech_structural_sl_dist or lot_calculator.get_sl_distance(atr_m15)
+        sl_price = lot_calculator.calculate_sl_price(
+            symbol=symbol, direction=direction,
+            entry_price=entry_price, atr=sl_distance, multiplier=1.0,
+        )
+
+    # ロット計算 (リスク2%涸排が常に正確にsl_distanceで計算される)
     lot = lot_calculator.calculate_lot(symbol, sl_distance)
     if lot is None:
         logger.warning("[Entry] %s: ロット計算失敗 → スキップ", symbol)
         discord_notifier.send_error(f"ロット計算失敗: {symbol}", "calculate_lot returned None")
         return
-
-    # SL価格算出
-    entry_price = price_info["ask"] if direction == "BUY" else price_info["bid"]
-    sym_info = mt5_connector.get_symbol_info(symbol)
-    digits = sym_info["digits"] if sym_info else 5
-
-    sl_price = lot_calculator.calculate_sl_price(
-        symbol=symbol,
-        direction=direction,
-        entry_price=entry_price,
-        atr=sl_distance,
-        multiplier=1.0,
-    )
 
     tp_distance = signal.tp_distance
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
@@ -847,10 +890,23 @@ def _reconcile_orphaned_db_trades():
         # MT5にないがDBはOPEN → 履歴から決済情報を取得
         deal_info = mt5_connector.get_closed_deal_by_ticket(ticket)
         if deal_info:
-            exit_price  = deal_info["exit_price"]
-            exit_profit = deal_info["profit"]
-            exit_reason = deal_info["exit_reason"]
-            closed_at   = deal_info["closed_at"]
+            # シンボル不一致検知: dealが別銘柄のものならデータ不正のため無視
+            deal_symbol = deal_info.get("symbol", "")
+            expected_symbol = trade.get("symbol", "")
+            if deal_symbol and deal_symbol != expected_symbol:
+                logger.error(
+                    "[Reconcile] シンボル不一致: DB=%s deal_symbol=%s ticket=%s → deal情報を無視",
+                    expected_symbol, deal_symbol, ticket,
+                )
+                exit_price  = 0.0
+                exit_profit = 0.0
+                exit_reason = "SYMBOL_MISMATCH_AUTO_CLOSE"
+                closed_at   = None
+            else:
+                exit_price  = deal_info["exit_price"]
+                exit_profit = deal_info["profit"]
+                exit_reason = deal_info["exit_reason"]
+                closed_at   = deal_info["closed_at"]
         else:
             # 履歴も取得できない場合は最低限クローズとして記録
             exit_price  = 0.0

@@ -18,8 +18,8 @@ def can_open_position(symbol: str) -> tuple[bool, str]:
     Returns:
         (可否, 理由メッセージ)
     """
-    # 対象銘柄の通貨グループ取得
-    groups = config.CURRENCY_GROUPS.get(symbol, [])
+    # 対象銘柄の通貨グループ取得 ("EURUSD#" → "EURUSD" でフォールバック)
+    groups = config.CURRENCY_GROUPS.get(symbol) or config.CURRENCY_GROUPS.get(symbol.rstrip("#."), [])
     if not groups:
         logger.warning("CURRENCY_GROUPS未定義: %s → チェックスキップ", symbol)
         return True, ""
@@ -48,7 +48,7 @@ def _count_positions_in_group(currency: str, open_symbols: list[str]) -> int:
     """指定通貨に関連する保有ポジション数をカウント"""
     count = 0
     for sym in open_symbols:
-        sym_groups = config.CURRENCY_GROUPS.get(sym, [])
+        sym_groups = config.CURRENCY_GROUPS.get(sym) or config.CURRENCY_GROUPS.get(sym.rstrip("#."), [])
         if currency in sym_groups:
             count += 1
     return count
@@ -60,7 +60,7 @@ def get_exposure_summary() -> dict[str, list[str]]:
     summary: dict[str, list[str]] = {}
 
     for sym in open_symbols:
-        for currency in config.CURRENCY_GROUPS.get(sym, []):
+        for currency in config.CURRENCY_GROUPS.get(sym) or config.CURRENCY_GROUPS.get(sym.rstrip("#."), []):
             summary.setdefault(currency, []).append(sym)
 
     return summary
