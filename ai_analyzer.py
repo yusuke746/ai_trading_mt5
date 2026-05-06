@@ -137,8 +137,15 @@ def analyze_entry(symbol: str, current_price: float,
   → smc_ob_confirmed=true が必須
 """
         else:
+            _sweep_dir = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
+            _expected_dir = "SELL" if _sweep_dir == "HIGH" else ("BUY" if _sweep_dir == "LOW" else "BUY or SELL")
             setup_condition = f"""
 【セットアップ条件 — 逆張り (Liquidity Sweep後の反転)】
+⚠️ エントリー方向ルール (厳守):
+  - HIGH sweep (上方向の流動性を刈り取った) → 必ず SELL でエントリー
+  - LOW sweep (下方向の流動性を刈り取った) → 必ず BUY でエントリー
+  今回の sweep方向: {_sweep_dir} → 正しい decision: {_expected_dir}
+
 チャートのLiquidityライン・OB・FVGゾーンを確認し、以下をすべて満たす場合のみエントリー:
   ① H1とM15のオーダーフロー方向が一致している
   ② Liquidityラインを ATR({atr_h1:.5f})×{config.SMC_SWEEP_ATR_MULT}以上 侵食後に反転したSweepが確認できる
@@ -412,6 +419,10 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
         skip_reasons.append("reversal_without_sweep")
     if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"} and signal.smc_sweep_direction != mech_sweep_type:
         skip_reasons.append("sweep_direction_mismatch")
+    if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"}:
+        expected_dir = "SELL" if mech_sweep_type == "HIGH" else "BUY"
+        if signal.decision != expected_dir:
+            skip_reasons.append(f"reversal_direction_wrong(sweep={mech_sweep_type},expected={expected_dir},got={signal.decision})")
     if entry_type == "CONTINUATION_BOS" and not signal.smc_ob_confirmed:
         skip_reasons.append("continuation_without_ob")
 
@@ -551,11 +562,13 @@ def _parse_entry_response(raw_text: str, fallback_atr: float) -> EntrySignal:
             smc_liquidity_sweep=False,
         )
 
-    sl_distance = float(data.get("sl_distance", fallback_atr * 1.5))
+    _sl_raw = data.get("sl_distance")
+    sl_distance = float(_sl_raw) if _sl_raw is not None else fallback_atr * 1.5
     if sl_distance <= 0:
         sl_distance = fallback_atr * 1.5
 
-    tp_distance = float(data.get("tp_distance", sl_distance * config.ENTRY_TP_R))
+    _tp_raw = data.get("tp_distance")
+    tp_distance = float(_tp_raw) if _tp_raw is not None else sl_distance * config.ENTRY_TP_R
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
     if tp_distance < min_tp_distance:
         tp_distance = min_tp_distance

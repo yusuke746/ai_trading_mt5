@@ -25,6 +25,39 @@ TF_MAP = {
 }
 
 
+def _symbol_candidates(base_symbol: str) -> list[str]:
+    """ブローカー依存のサフィックス差分(#, .)を吸収した候補を返す。"""
+    base = (base_symbol or "").strip()
+    if not base:
+        return []
+
+    candidates: list[str] = [base]
+    stripped = base.rstrip("#.")
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+    for suffix in ("#", "."):
+        sym = stripped + suffix
+        if stripped and sym not in candidates:
+            candidates.append(sym)
+
+    # 監視銘柄にも同一ベース名がいれば候補に含める
+    for watched in config.SYMBOLS:
+        if watched.rstrip("#.") == stripped and watched not in candidates:
+            candidates.append(watched)
+
+    return candidates
+
+
+def _get_tick_with_fallback(base_symbol: str):
+    """シンボル候補を順に試し、最初に取得できたtickを返す。"""
+    for candidate in _symbol_candidates(base_symbol):
+        mt5.symbol_select(candidate, True)
+        tick = mt5.symbol_info_tick(candidate)
+        if tick is not None:
+            return tick, candidate
+    return None, None
+
+
 # ── 接続管理 ────────────────────────────
 
 def initialize() -> bool:
@@ -140,9 +173,11 @@ def get_rates(symbol: str, timeframe: str, count: int = 200) -> pd.DataFrame | N
 
 
 def get_current_price(symbol: str) -> dict | None:
-    tick = mt5.symbol_info_tick(symbol)
+    tick, resolved = _get_tick_with_fallback(symbol)
     if tick is None:
         return None
+    if resolved != symbol:
+        logger.warning("価格取得でシンボル補正: %s -> %s", symbol, resolved)
     return {"bid": tick.bid, "ask": tick.ask, "time": tick.time}
 
 
@@ -508,9 +543,10 @@ def place_order(symbol: str, direction: str, lot: float,
         "注文成功: %s %s lot=%.2f price=%.5f order=%s deal=%s",
         symbol, direction, lot, result.price, result.order, result.deal,
     )
-    # position=フィルタは position_id (広報 = deal ticket) で検索するため、
-    # deal ticket を優先して返す (0 なら order ticket でフォールバック)
-    position_ticket = result.deal if result.deal else result.order
+    # ヘッジ口座ではポジションticketは通常 order ticket 側。
+    # deal ticket を保存すると positions_get(ticket=...) と一致せず、
+    # 後続の照合で誤判定しやすいため order を優先する。
+    position_ticket = result.order if result.order else result.deal
     return position_ticket
 
 
@@ -584,8 +620,9 @@ def get_server_datetime() -> datetime | None:
     """
     from datetime import timezone, timedelta
     server_tz = timezone(timedelta(hours=3))
-    for sym in ("EURUSD", "USDJPY", "XAUUSD", "GOLD"):
-        tick = mt5.symbol_info_tick(sym)
+    symbols_to_probe = list(config.SYMBOLS) + ["EURUSD", "USDJPY", "XAUUSD", "GOLD"]
+    for sym in symbols_to_probe:
+        tick, _ = _get_tick_with_fallback(sym)
         if tick is not None:
             utc_dt = datetime.utcfromtimestamp(tick.time).replace(tzinfo=timezone.utc)
             return utc_dt.astimezone(server_tz)
@@ -628,10 +665,23 @@ def get_minutes_to_weekend_close() -> float | None:
 # ── USDJPY レート取得 (通貨換算用) ──────
 
 def get_usdjpy_rate() -> float:
-    tick = mt5.symbol_info_tick("USDJPY")
+    tick, resolved = _get_tick_with_fallback("USDJPY")
     if tick is None:
-        logger.warning("USDJPYレート取得失敗、デフォルト150.0を使用")
+        # 最終フォールバック: symbols_get からUSDJPY派生を探索
+        symbols = mt5.symbols_get("USDJPY*") or []
+        for s in symbols:
+            mt5.symbol_select(s.name, True)
+            tick = mt5.symbol_info_tick(s.name)
+            if tick is not None:
+                resolved = s.name
+                break
+
+    if tick is None:
+        logger.warning("USDJPYレート取得失敗(候補全滅)、デフォルト150.0を使用")
         return 150.0
+
+    if resolved and resolved != "USDJPY":
+        logger.info("USDJPY換算シンボル補正: USDJPY -> %s", resolved)
     return (tick.bid + tick.ask) / 2.0
 
 
@@ -643,13 +693,13 @@ def get_conversion_rate_to_jpy(currency: str) -> float:
 
     # EUR, GBP 等 → xxxJPY で変換
     pair = currency + "JPY"
-    tick = mt5.symbol_info_tick(pair)
+    tick, _ = _get_tick_with_fallback(pair)
     if tick is not None:
         return (tick.bid + tick.ask) / 2.0
 
     # xxxJPY が無い場合: xxxUSD → USDJPY で間接変換
     pair_usd = currency + "USD"
-    tick_usd = mt5.symbol_info_tick(pair_usd)
+    tick_usd, _ = _get_tick_with_fallback(pair_usd)
     if tick_usd is not None:
         return ((tick_usd.bid + tick_usd.ask) / 2.0) * get_usdjpy_rate()
 

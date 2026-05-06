@@ -108,10 +108,29 @@ def calculate_lot(symbol: str, sl_distance: float) -> float | None:
     )
 
     # ── 6. ロット数をMT5の制約に合わせる ──
-    lot = _round_lot(raw_lot, vol_step)
-    lot = max(lot, vol_min)
-    lot = min(lot, vol_max)
-    lot = min(lot, config.MAX_LOT)
+    rounded_lot = _round_lot(raw_lot, vol_step)
+    lot = rounded_lot
+    clamp_reasons: list[str] = []
+
+    if lot < vol_min:
+        clamp_reasons.append(f"min_volume({vol_min})")
+        lot = vol_min
+    if lot > vol_max:
+        clamp_reasons.append(f"symbol_max({vol_max})")
+        lot = vol_max
+    if lot > config.MAX_LOT:
+        clamp_reasons.append(f"config_max({config.MAX_LOT})")
+        lot = config.MAX_LOT
+
+    if clamp_reasons or abs(rounded_lot - raw_lot) > 1e-12:
+        logger.info(
+            "[LotCalcMonitor] %s: raw=%.6f rounded=%.6f final=%.6f clamp=%s",
+            symbol,
+            raw_lot,
+            rounded_lot,
+            lot,
+            ",".join(clamp_reasons) if clamp_reasons else "step_round_only",
+        )
 
     # ── 7. 余剰証拠金チェック ──
     lot = _check_margin(symbol, lot, margin_free, sym_info)
@@ -122,6 +141,35 @@ def calculate_lot(symbol: str, sl_distance: float) -> float | None:
             lot, vol_min,
         )
         return None
+
+    # 監視用: 確定ロット時点の想定損失を口座通貨で可視化
+    est_loss_profit = loss_per_lot * lot
+    if account_currency == profit_currency:
+        est_loss_account = est_loss_profit
+    else:
+        back_rate = _get_conversion_rate(profit_currency, account_currency)
+        est_loss_account = est_loss_profit / back_rate if back_rate and back_rate > 0 else None
+
+    if est_loss_account is not None and balance > 0:
+        est_risk_pct = est_loss_account / balance * 100
+        logger.info(
+            "[LotCalcMonitor] %s: sl_dist=%.5f lot=%.2f est_loss=%.0f %s (%.2f%% of balance)",
+            symbol,
+            sl_distance,
+            lot,
+            est_loss_account,
+            account_currency,
+            est_risk_pct,
+        )
+    else:
+        logger.info(
+            "[LotCalcMonitor] %s: sl_dist=%.5f lot=%.2f est_loss=%s (account_ccy=%s)",
+            symbol,
+            sl_distance,
+            lot,
+            "N/A",
+            account_currency,
+        )
 
     logger.info("[LotCalc] 最終ロット: %s → %.2f lot", symbol, lot)
     return lot
@@ -179,11 +227,10 @@ def _get_conversion_rate(from_ccy: str, to_ccy: str) -> float | None:
 
 
 def _get_mid_price(symbol: str) -> float | None:
-    import MetaTrader5 as mt5
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
+    price = mt5_connector.get_current_price(symbol)
+    if price is None:
         return None
-    return (tick.bid + tick.ask) / 2.0
+    return (price["bid"] + price["ask"]) / 2.0
 
 
 def _round_lot(lot: float, step: float) -> float:

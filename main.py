@@ -263,7 +263,7 @@ def _mechanical_smc_gate(
     swept_level: float | None = None
 
     for level in levels:
-        for _, bar in recent.iterrows():
+        for _, bar in recent.iloc[::-1].iterrows():  # 最新バーから逆順に検索（最新スイープを優先）
             # 高値Sweep: レベル上にATR*mult以上侵食してレベル下でクローズ
             if bar["high"] > level + min_penetration and bar["close"] < level:
                 sweep_pass = True
@@ -809,6 +809,36 @@ def _check_entry(symbol: str):
             entry_price=entry_price, atr=sl_distance, multiplier=1.0,
         )
 
+    # 極端に近いSLを防ぎ、低残高時の過剰ロット化を抑制
+    min_sl_distance = atr_m15 * config.ENTRY_MIN_SL_ATR_MULT
+    if sl_distance < min_sl_distance:
+        old_sl_distance = sl_distance
+        sl_distance = min_sl_distance
+        if direction == "BUY":
+            sl_price = round(entry_price - sl_distance, digits)
+        else:
+            sl_price = round(entry_price + sl_distance, digits)
+        logger.warning(
+            "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f)",
+            symbol,
+            old_sl_distance,
+            min_sl_distance,
+            atr_m15,
+            config.ENTRY_MIN_SL_ATR_MULT,
+        )
+
+    logger.info(
+        "[EntryMonitor] %s: entry_type=%s dir=%s balance=%.0f risk_per_trade=%.2f%% atr_m15=%.5f sl_dist=%.5f sl=%.5f",
+        symbol,
+        mech_entry_type,
+        direction,
+        balance,
+        config.RISK_PER_TRADE * 100,
+        atr_m15,
+        sl_distance,
+        sl_price,
+    )
+
     # ロット計算 (リスク2%涸排が常に正確にsl_distanceで計算される)
     lot = lot_calculator.calculate_lot(symbol, sl_distance)
     if lot is None:
@@ -825,6 +855,14 @@ def _check_entry(symbol: str):
         tp_price = round(entry_price + tp_distance, digits)
     else:
         tp_price = round(entry_price - tp_distance, digits)
+
+    logger.info(
+        "[EntryMonitor] %s: tp_dist=%.5f min_tp=%.5f tp=%.5f",
+        symbol,
+        tp_distance,
+        min_tp_distance,
+        tp_price,
+    )
 
     # 発注
     ticket = mt5_connector.place_order(symbol, direction, lot, sl_price, tp_price)
@@ -895,13 +933,10 @@ def _reconcile_orphaned_db_trades():
             expected_symbol = trade.get("symbol", "")
             if deal_symbol and deal_symbol != expected_symbol:
                 logger.error(
-                    "[Reconcile] シンボル不一致: DB=%s deal_symbol=%s ticket=%s → deal情報を無視",
+                    "[Reconcile] シンボル不一致: DB=%s deal_symbol=%s ticket=%s → 今回はDB更新せず次サイクル再試行",
                     expected_symbol, deal_symbol, ticket,
                 )
-                exit_price  = 0.0
-                exit_profit = 0.0
-                exit_reason = "SYMBOL_MISMATCH_AUTO_CLOSE"
-                closed_at   = None
+                continue
             else:
                 exit_price  = deal_info["exit_price"]
                 exit_profit = deal_info["profit"]

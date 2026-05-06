@@ -123,6 +123,9 @@ FLAT_BEFORE_WEEKEND_CLOSE_LEAD_MINUTES = max(0, int(os.getenv("FLAT_BEFORE_WEEKE
 # 利確優先のTP設定
 ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
 ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
+# エントリーSLの最小幅 (M15 ATR倍率)。
+# REVERSAL_SWEEPで構造SLが近すぎる場合の過剰ロット化を防ぐ。
+ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")))
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
 FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
 MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))
