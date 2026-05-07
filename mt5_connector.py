@@ -488,21 +488,24 @@ def get_closed_deal_by_ticket(ticket: int) -> dict | None:
 
 
 def _send_order_with_filling_fallback(request: dict, symbol: str, context: str):
-    """IOCで失敗した場合にRETURNで再送する。"""
-    result = mt5.order_send(request)
-    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-        return result
-
-    # 一部ブローカー/銘柄では RETURN を要求するためフォールバック
-    retry = dict(request)
-    retry["type_filling"] = mt5.ORDER_FILLING_RETURN
-    retry_result = mt5.order_send(retry)
-    if retry_result is not None and retry_result.retcode == mt5.TRADE_RETCODE_DONE:
-        logger.info("%s: IOC失敗のためRETURNで再送成功: %s", context, symbol)
-        return retry_result
-
-    # 失敗時は最後の結果を返す（Noneでなければ情報が多い方）
-    return retry_result if retry_result is not None else result
+    """IOC→FOK→RETURNの順でfillingモードをフォールバックする。"""
+    _FILLING_MODES = [
+        mt5.ORDER_FILLING_IOC,
+        mt5.ORDER_FILLING_FOK,
+        mt5.ORDER_FILLING_RETURN,
+    ]
+    last_result = None
+    for mode in _FILLING_MODES:
+        attempt = dict(request)
+        attempt["type_filling"] = mode
+        result = mt5.order_send(attempt)
+        if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+            if mode != mt5.ORDER_FILLING_IOC:
+                mode_name = {mt5.ORDER_FILLING_FOK: "FOK", mt5.ORDER_FILLING_RETURN: "RETURN"}.get(mode, str(mode))
+                logger.info("%s: %sで注文成功: %s", context, mode_name, symbol)
+            return result
+        last_result = result if result is not None else last_result
+    return last_result
 
 
 # ── 注文執行 ────────────────────────────
