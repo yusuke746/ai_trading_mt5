@@ -67,7 +67,7 @@ def send_entry(symbol: str, direction: str, lot: float,
 
 
 def send_exit(symbol: str, direction: str, exit_price: float,
-              profit: float, reasoning: str):
+              profit: float, reasoning: str, source: str = "AI判断"):
     color = 0x2ECC71 if profit >= 0 else 0xE74C3C
     embed = {
         "title": f"📉 Exit: {symbol} {direction}",
@@ -75,7 +75,7 @@ def send_exit(symbol: str, direction: str, exit_price: float,
         "fields": [
             {"name": "決済価格", "value": str(exit_price), "inline": True},
             {"name": "損益", "value": f"¥{profit:,.0f}", "inline": True},
-            {"name": "AI判断 (抜粋)", "value": reasoning[:500]},
+            {"name": f"{source} (抜粋)", "value": reasoning[:500]},
         ],
         "timestamp": datetime.utcnow().isoformat(),
     }

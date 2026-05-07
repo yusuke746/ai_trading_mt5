@@ -810,7 +810,12 @@ def _check_entry(symbol: str):
         )
 
     # 極端に近いSLを防ぎ、低残高時の過剰ロット化を抑制
-    min_sl_distance = atr_m15 * config.ENTRY_MIN_SL_ATR_MULT
+    symbol_key = str(symbol).rstrip("#.").upper()
+    min_sl_mult = config.ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL.get(
+        symbol_key,
+        config.ENTRY_MIN_SL_ATR_MULT,
+    )
+    min_sl_distance = atr_m15 * min_sl_mult
     if sl_distance < min_sl_distance:
         old_sl_distance = sl_distance
         sl_distance = min_sl_distance
@@ -819,12 +824,13 @@ def _check_entry(symbol: str):
         else:
             sl_price = round(entry_price + sl_distance, digits)
         logger.warning(
-            "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f)",
+            "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f symbol=%s)",
             symbol,
             old_sl_distance,
             min_sl_distance,
             atr_m15,
-            config.ENTRY_MIN_SL_ATR_MULT,
+            min_sl_mult,
+            symbol_key,
         )
 
     logger.info(
@@ -1454,12 +1460,15 @@ def _execute_exit(pos: dict, reasoning: str, action_type: str):
         )
 
     # Discord通知
+    _AI_ACTION_TYPES = {"EXIT_CHECK", "EXIT_PREMISE_BREAK"}
+    exit_source = "AI判断" if action_type in _AI_ACTION_TYPES else "機械判定"
     discord_notifier.send_exit(
         symbol=symbol,
         direction=pos["type"],
         exit_price=pos["price_current"],
         profit=pos["profit"],
         reasoning=reasoning,
+        source=exit_source,
     )
 
 

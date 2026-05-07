@@ -126,6 +126,13 @@ ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
 # エントリーSLの最小幅 (M15 ATR倍率)。
 # REVERSAL_SWEEPで構造SLが近すぎる場合の過剰ロット化を防ぐ。
 ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")))
+# 銘柄別の最小SL幅上書き。GOLDはノイズが大きいため既定で広めに確保する。
+ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
+    "GOLD": max(
+        ENTRY_MIN_SL_ATR_MULT,
+        float(os.getenv("ENTRY_MIN_SL_ATR_MULT_GOLD", "1.2")),
+    ),
+}
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
 FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
 MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))

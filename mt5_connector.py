@@ -445,12 +445,22 @@ def get_closed_deal_by_ticket(ticket: int) -> dict | None:
     if not deals:
         return None
 
-    # entry=DEAL_ENTRY_OUT (1) or DEAL_ENTRY_INOUT (2) が決済deal
-    close_deal = None
-    for d in deals:
-        if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT):
-            close_deal = d
-            break
+    # entry=DEAL_ENTRY_OUT (1) or DEAL_ENTRY_INOUT (2) が決済deal。
+    # 取得結果に別ポジションのdealが混ざるケースがあるため、position_idで厳密に絞る。
+    close_candidates = [
+        d for d in deals
+        if getattr(d, "position_id", None) == ticket
+        and d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT)
+    ]
+
+    if close_candidates:
+        # 同一ポジション内で最も新しい決済dealを採用する。
+        close_deal = max(
+            close_candidates,
+            key=lambda d: (getattr(d, "time_msc", 0), getattr(d, "time", 0)),
+        )
+    else:
+        close_deal = None
 
     if close_deal is None:
         return None

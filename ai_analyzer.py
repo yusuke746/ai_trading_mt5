@@ -155,6 +155,15 @@ def analyze_entry(symbol: str, current_price: float,
     else:
         setup_condition = ""
 
+    _symbol_key = str(symbol).rstrip("#.").upper()
+    gold_safety_note = ""
+    if _symbol_key == "GOLD":
+        gold_safety_note = f"""
+【GOLD専用の注意】
+- GOLDはヒゲ/ノイズが大きいため、無効化ライン(invalidation_price)を現在値に近づけすぎないこと。
+- invalidation_price は、エントリー価格から最低でも M15 ATR({atr_m15:.5f}) × 1.0 以上離れた構造破綻レベルを返すこと。
+"""
+
     prompt = f"""あなたはSMCアナリストです。
 H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済み）を見て
 {symbol}のエントリー判断をしてください。
@@ -163,6 +172,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
 - 銘柄: {symbol} / 現在価格: {current_price}
 - M15 ATR: {atr_m15:.5f} / H1 ATR: {atr_h1:.5f}
 - 口座残高: ¥{balance:,.0f}
+{gold_safety_note}
 {setup_condition}
 【SKIP条件 (1つでも該当したらSKIP)】
 - confidence < 70
