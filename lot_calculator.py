@@ -190,6 +190,40 @@ def get_sl_distance(atr: float, multiplier: float = 1.5) -> float:
     return atr * multiplier
 
 
+def apply_multiplier(symbol: str, lot: float, multiplier: float) -> float | None:
+    """ロット数に倍率を掛けて MT5 の volume_step に丸めて返す。
+    最小ロット未満になる場合は None を返す。
+
+    Args:
+        symbol: MT5シンボル名
+        lot: 元のロット数
+        multiplier: 倍率 (例: 0.5 = 50%)
+
+    Returns:
+        調整後ロット、または最小ロット未満で発注不可なら None
+    """
+    if multiplier >= 1.0:
+        return lot
+
+    sym_info = mt5_connector.get_symbol_info(symbol)
+    if sym_info is None:
+        # シンボル情報取得失敗時は単純スケール
+        return round(lot * multiplier, 2)
+
+    vol_min = sym_info["volume_min"]
+    vol_step = sym_info["volume_step"]
+
+    scaled = _round_lot(lot * multiplier, vol_step)
+    if scaled < vol_min:
+        logger.warning(
+            "[LotCalc] %s: 復帰後ロット %.4f × %.1f = %.4f が最小ロット %.4f 未満 → 発注スキップ",
+            symbol, lot, multiplier, scaled, vol_min,
+        )
+        return None
+
+    return scaled
+
+
 # ── 内部ヘルパー ────────────────────────
 
 def _get_conversion_rate(from_ccy: str, to_ccy: str) -> float | None:

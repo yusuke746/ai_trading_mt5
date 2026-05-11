@@ -39,8 +39,19 @@ class MarketStressState:
     should_close_positions: bool = False  # 既存ポジションもクローズすべきか
 
 
+@dataclass
+class PostRecoveryState:
+    """ストレス解除直後の慎重モード状態。残りトレード数が0になるまでロット縮小を適用する。"""
+    symbol: str
+    trades_remaining: int   # あと何回ロット縮小するか
+    lot_multiplier: float   # ロット倍率 (例: 0.5 = 50%)
+    cleared_at: datetime    # ストレス解除時刻
+
+
 # symbol → MarketStressState (アクティブなストレス状態)
 _stress_states: dict[str, MarketStressState] = {}
+# symbol → PostRecoveryState (復帰後慎重モード状態)
+_post_recovery_states: dict[str, PostRecoveryState] = {}
 _lock = threading.Lock()
 
 # 銘柄ごとのスプレッドベースライン (過去N件のスプレッドを保持)
@@ -88,15 +99,25 @@ def check_and_update(
         state = _stress_states.get(symbol)
 
     if state is not None:
-        cleared = _check_clear(state, symbol, current_spread, baseline_spread, now)
+        cleared = _check_clear(state, symbol, current_spread, baseline_spread, now, current_atr, baseline_atr)
         if cleared:
             with _lock:
                 del _stress_states[symbol]
+                # 復帰後慎重モードを開始: 最初 N 回はロット縮小
+                _post_recovery_states[symbol] = PostRecoveryState(
+                    symbol=symbol,
+                    trades_remaining=config.POST_RECOVERY_TRADE_COUNT,
+                    lot_multiplier=config.POST_RECOVERY_LOT_MULTIPLIER,
+                    cleared_at=now,
+                )
             logger.info(
-                "[MarketStress] %s: ストレス状態解除 (保持 %.0f 分, spread=%.1f)",
+                "[MarketStress] %s: ストレス状態解除 (保持 %.0f 分, spread=%.1f) "
+                "→ 復帰後慎重モード開始 (x%.1f × 最初%d回)",
                 symbol,
                 (now - state.triggered_at).total_seconds() / 60,
                 current_spread,
+                config.POST_RECOVERY_LOT_MULTIPLIER,
+                config.POST_RECOVERY_TRADE_COUNT,
             )
             state = None
 
@@ -167,6 +188,8 @@ def _check_clear(
     current_spread: float,
     baseline_spread: float | None,
     now: datetime,
+    current_atr: float | None = None,
+    baseline_atr: float | None = None,
 ) -> bool:
     """ストレス状態を解除してよいか判定する。"""
     # 最低保持期限内は絶対に解除しない
@@ -177,12 +200,34 @@ def _check_clear(
     if now < state.hold_until:
         return False
 
-    # スプレッドが正常範囲に戻っているか
+    # 条件1: スプレッドが正常範囲に戻っているか
     if baseline_spread and baseline_spread > 0:
         spread_ratio = current_spread / baseline_spread
         if spread_ratio >= config.MARKET_STRESS_SPREAD_CLEAR_RATIO:
             # スプレッドがまだ広い → 解除しない
             return False
+
+    # 条件2: ATRが正常範囲に戻っているか
+    if current_atr and baseline_atr and baseline_atr > 0:
+        atr_ratio = current_atr / baseline_atr
+        if atr_ratio >= config.MARKET_STRESS_ATR_CLEAR_RATIO:
+            logger.debug(
+                "[MarketStress] %s: ATRまだ高い (x%.2f >= %.2f) → 解除保留",
+                symbol, atr_ratio, config.MARKET_STRESS_ATR_CLEAR_RATIO,
+            )
+            return False
+
+    # 条件3: ニュースブロックが解除されているか
+    try:
+        import news_monitor
+        news_blocked, news_reason = news_monitor.check_entry_news_block(symbol)
+        if news_blocked:
+            logger.debug(
+                "[MarketStress] %s: ニュースブロック中 → 解除保留 (%s)", symbol, news_reason
+            )
+            return False
+    except Exception:
+        pass  # news_monitor 取得失敗は無視して解除を許可
 
     return True
 
@@ -282,6 +327,37 @@ JSONのみで回答してください:
     except Exception as e:
         logger.warning("[MarketStress] GPT判断失敗 %s: %s → フォールバックTTL使用", symbol, e)
     return None
+
+
+# ── 復帰後慎重モード API ────────────────────────────────
+
+def get_lot_multiplier(symbol: str) -> float:
+    """ストレス復帰後慎重モード中であればロット倍率を返す。通常時は 1.0。"""
+    with _lock:
+        pr = _post_recovery_states.get(symbol)
+    if pr is None or pr.trades_remaining <= 0:
+        return 1.0
+    return pr.lot_multiplier
+
+
+def consume_post_recovery_trade(symbol: str) -> None:
+    """発注成立後に呼び出してカウンタを 1 減らす。0 になったら慎重モード終了。"""
+    with _lock:
+        pr = _post_recovery_states.get(symbol)
+        if pr is None:
+            return
+        pr.trades_remaining -= 1
+        if pr.trades_remaining <= 0:
+            del _post_recovery_states[symbol]
+            logger.info(
+                "[MarketStress] %s: 復帰後慎重モード終了 (通常ロットに復帰)",
+                symbol,
+            )
+        else:
+            logger.info(
+                "[MarketStress] %s: 復帰後慎重モード残り %d 回 (x%.1f)",
+                symbol, pr.trades_remaining, pr.lot_multiplier,
+            )
 
 
 # ── 外部公開API ──────────────────────────────────────

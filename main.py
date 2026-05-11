@@ -562,11 +562,13 @@ def _check_entry(symbol: str):
     sym_info_stress = mt5_connector.get_symbol_info(symbol)
     if sym_info_stress:
         current_spread = float(sym_info_stress.get("spread", 0))
-        # H1 ATR の過去20本平均をベースラインとして使用
-        atr_series = mt5_connector.calculate_atr(df_h1, config.ATR_PERIOD)
-        # pandas Series の場合は最後の N 要素平均を使う
+        # ベースラインATR: 直近20本を除いた過去データで計算 (calculate_atrはfloatを返すためilocは不可)
         try:
-            baseline_atr_val = float(atr_series.iloc[-20:].mean()) if hasattr(atr_series, "iloc") else None
+            baseline_atr_val = (
+                mt5_connector.calculate_atr(df_h1.iloc[:-20], config.ATR_PERIOD)
+                if len(df_h1) > config.ATR_PERIOD + 20
+                else None
+            )
         except Exception:
             baseline_atr_val = None
         stress = market_stress.check_and_update(
@@ -773,65 +775,80 @@ def _check_entry(symbol: str):
     sym_info = mt5_connector.get_symbol_info(symbol)
     digits = sym_info["digits"] if sym_info else 5
 
-    # ─ SL幅の決定プロセス (機械一元管理、AI値は使用しない) ─
-    # REVERSAL_SWEEP: swept_level + spread/ATRバッファで機械的に確定
-    # CONTINUATION_BOS: 機械ゲートのATR×1.5を使用
+    # ─ SL幅の決定プロセス (固定SL優先 → ATR倍率) ─
+    symbol_key = str(symbol).rstrip("#.").upper()
+    fixed_sl = config.ENTRY_FIXED_SL_BY_SYMBOL.get(symbol_key)
 
-    if mech_entry_type == "REVERSAL_SWEEP" and mech_swept_level is not None:
-        spread = price_info["ask"] - price_info["bid"]
-        buffer = max(atr_m15 * 0.2, spread * 2)
-        if direction == "SELL":
-            structural_sl = round(mech_swept_level + buffer, digits)
-            structural_sl_dist = structural_sl - entry_price
+    if fixed_sl is not None:
+        # ───【固定SLモード】銘柄別の固定値を使用 ───
+        sl_distance = fixed_sl
+        if direction == "BUY":
+            sl_price = round(entry_price - sl_distance, digits)
         else:
-            structural_sl = round(mech_swept_level - buffer, digits)
-            structural_sl_dist = entry_price - structural_sl
+            sl_price = round(entry_price + sl_distance, digits)
+        logger.info(
+            "[Entry] %s: 固定SL適用 entry=%.5f sl_dist=%.5f sl=%.5f dir=%s",
+            symbol, entry_price, sl_distance, sl_price, direction,
+        )
+    else:
+        # ───【ATR倍率モード】既存ロジック ───
+        # REVERSAL_SWEEP: swept_level + spread/ATRバッファで機械的に確定
+        # CONTINUATION_BOS: 機械ゲートのATR×1.5を使用
 
-        if structural_sl_dist > 0:
-            sl_distance = structural_sl_dist
-            sl_price = structural_sl
-            logger.info(
-                "[Entry] %s: REVERSAL_SWEEP SL: swept_level=%.5f buffer=%.5f sl_dist=%.5f sl_price=%.5f",
-                symbol, mech_swept_level, buffer, sl_distance, sl_price,
-            )
+        if mech_entry_type == "REVERSAL_SWEEP" and mech_swept_level is not None:
+            spread = price_info["ask"] - price_info["bid"]
+            buffer = max(atr_m15 * 0.2, spread * 2)
+            if direction == "SELL":
+                structural_sl = round(mech_swept_level + buffer, digits)
+                structural_sl_dist = structural_sl - entry_price
+            else:
+                structural_sl = round(mech_swept_level - buffer, digits)
+                structural_sl_dist = entry_price - structural_sl
+
+            if structural_sl_dist > 0:
+                sl_distance = structural_sl_dist
+                sl_price = structural_sl
+                logger.info(
+                    "[Entry] %s: REVERSAL_SWEEP SL: swept_level=%.5f buffer=%.5f sl_dist=%.5f sl_price=%.5f",
+                    symbol, mech_swept_level, buffer, sl_distance, sl_price,
+                )
+            else:
+                # swept_levelがエントリー価格より不利側にある異常はフォールバック
+                sl_distance = mech_structural_sl_dist or lot_calculator.get_sl_distance(atr_m15)
+                sl_price = lot_calculator.calculate_sl_price(
+                    symbol=symbol, direction=direction,
+                    entry_price=entry_price, atr=sl_distance, multiplier=1.0,
+                )
         else:
-            # swept_levelがエントリー価格より不利側にある異常はフォールバック
+            # CONTINUATION_BOS: ATR×1.5（機械ゲート一元）
             sl_distance = mech_structural_sl_dist or lot_calculator.get_sl_distance(atr_m15)
             sl_price = lot_calculator.calculate_sl_price(
                 symbol=symbol, direction=direction,
                 entry_price=entry_price, atr=sl_distance, multiplier=1.0,
             )
-    else:
-        # CONTINUATION_BOS: ATR×1.5（機械ゲート一元）
-        sl_distance = mech_structural_sl_dist or lot_calculator.get_sl_distance(atr_m15)
-        sl_price = lot_calculator.calculate_sl_price(
-            symbol=symbol, direction=direction,
-            entry_price=entry_price, atr=sl_distance, multiplier=1.0,
-        )
 
-    # 極端に近いSLを防ぎ、低残高時の過剰ロット化を抑制
-    symbol_key = str(symbol).rstrip("#.").upper()
-    min_sl_mult = config.ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL.get(
-        symbol_key,
-        config.ENTRY_MIN_SL_ATR_MULT,
-    )
-    min_sl_distance = atr_m15 * min_sl_mult
-    if sl_distance < min_sl_distance:
-        old_sl_distance = sl_distance
-        sl_distance = min_sl_distance
-        if direction == "BUY":
-            sl_price = round(entry_price - sl_distance, digits)
-        else:
-            sl_price = round(entry_price + sl_distance, digits)
-        logger.warning(
-            "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f symbol=%s)",
-            symbol,
-            old_sl_distance,
-            min_sl_distance,
-            atr_m15,
-            min_sl_mult,
+        # ATR倍率モード時の最小SL幅チェック
+        min_sl_mult = config.ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL.get(
             symbol_key,
+            config.ENTRY_MIN_SL_ATR_MULT,
         )
+        min_sl_distance = atr_m15 * min_sl_mult
+        if sl_distance < min_sl_distance:
+            old_sl_distance = sl_distance
+            sl_distance = min_sl_distance
+            if direction == "BUY":
+                sl_price = round(entry_price - sl_distance, digits)
+            else:
+                sl_price = round(entry_price + sl_distance, digits)
+            logger.warning(
+                "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f symbol=%s)",
+                symbol,
+                old_sl_distance,
+                min_sl_distance,
+                atr_m15,
+                min_sl_mult,
+                symbol_key,
+            )
 
     logger.info(
         "[EntryMonitor] %s: entry_type=%s dir=%s balance=%.0f risk_per_trade=%.2f%% atr_m15=%.5f sl_dist=%.5f sl=%.5f",
@@ -851,6 +868,22 @@ def _check_entry(symbol: str):
         logger.warning("[Entry] %s: ロット計算失敗 → スキップ", symbol)
         discord_notifier.send_error(f"ロット計算失敗: {symbol}", "calculate_lot returned None")
         return
+
+    # ストレス復帰後慎重モード: 最初 N 回はロット縮小
+    lot_multiplier = market_stress.get_lot_multiplier(symbol)
+    if lot_multiplier < 1.0:
+        scaled_lot = lot_calculator.apply_multiplier(symbol, lot, lot_multiplier)
+        if scaled_lot is None:
+            logger.warning(
+                "[Entry] %s: 復帰後ロット縮小で最小ロット未満 → スキップ (元lot=%.4f × %.1f)",
+                symbol, lot, lot_multiplier,
+            )
+            return
+        logger.info(
+            "[Entry] %s: 復帰後慎重モード ロット縮小 %.4f → %.4f (x%.1f)",
+            symbol, lot, scaled_lot, lot_multiplier,
+        )
+        lot = scaled_lot
 
     tp_distance = signal.tp_distance
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
@@ -874,6 +907,9 @@ def _check_entry(symbol: str):
     ticket = mt5_connector.place_order(symbol, direction, lot, sl_price, tp_price)
     if ticket is None:
         return
+
+    # 復帰後慎重モードのカウンタを消費 (発注成立時のみ)
+    market_stress.consume_post_recovery_trade(symbol)
 
     # DB記録
     smc_summary = (

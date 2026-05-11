@@ -123,15 +123,26 @@ FLAT_BEFORE_WEEKEND_CLOSE_LEAD_MINUTES = max(0, int(os.getenv("FLAT_BEFORE_WEEKE
 # 利確優先のTP設定
 ENTRY_TP_R = float(os.getenv("ENTRY_TP_R", "1.2"))
 ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
-# エントリーSLの最小幅 (M15 ATR倍率)。
-# REVERSAL_SWEEPで構造SLが近すぎる場合の過剰ロット化を防ぐ。
+
+# ──────────────────────────────────────
+# エントリーSL設定（固定値 vs ATR倍率）
+# ──────────────────────────────────────
+# 銘柄別の固定SL幅設定
+# None: ATR倍率を使用 | 数値: その値を固定SLとして使用（機械ゲートの structural_sl_dist を無視）
+ENTRY_FIXED_SL_BY_SYMBOL = {
+    "GOLD": float(os.getenv("ENTRY_FIXED_SL_GOLD", "0.50")),     # オンス単位で固定
+    "USDJPY": None,     # ATR倍率を使用
+    "EURUSD": None,
+    "US100Cash": None,
+    "OILCash": None,
+}
+
+# ATR倍率ベースのSL計算時の最小幅（ENTRY_FIXED_SL_BY_SYMBOL で None の銘柄のみ使用）
 ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")))
-# 銘柄別の最小SL幅上書き。GOLDはノイズが大きいため既定で広めに確保する。
+# 銘柄別の最小SL幅上書き（ATR倍率使用時のみ）
 ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
-    "GOLD": max(
-        ENTRY_MIN_SL_ATR_MULT,
-        float(os.getenv("ENTRY_MIN_SL_ATR_MULT_GOLD", "1.2")),
-    ),
+    "USDJPY": 1.0,
+    "EURUSD": 0.8,
 }
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
 FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
@@ -234,8 +245,13 @@ MARKET_STRESS_HOLD_MIN_MIN = int(os.getenv("MARKET_STRESS_HOLD_MIN_MIN", "10")) 
 MARKET_STRESS_HOLD_MAX_MIN = int(os.getenv("MARKET_STRESS_HOLD_MAX_MIN", "480"))
 # スプレッドが平常比 1.5 倍未満に戻ったら解除条件を満たすとみなす
 MARKET_STRESS_SPREAD_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_CLEAR_RATIO", "1.5"))
+# ATRが平常比 1.3 倍未満に戻ったら解除条件を満たすとみなす
+MARKET_STRESS_ATR_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_ATR_CLEAR_RATIO", "1.3"))
 # 平常スプレッドのベースライン計算に使う過去サンプル数 (銘柄ごと)
 MARKET_STRESS_SPREAD_BASELINE_N = int(os.getenv("MARKET_STRESS_SPREAD_BASELINE_N", "50"))
+# ストレス解除直後の慎重モード: 最初 N 回のエントリーはロットを縮小する
+POST_RECOVERY_TRADE_COUNT      = int(os.getenv("POST_RECOVERY_TRADE_COUNT", "1"))
+POST_RECOVERY_LOT_MULTIPLIER   = float(os.getenv("POST_RECOVERY_LOT_MULTIPLIER", "0.5"))
 
 # ──────────────────────────────────────
 # チャート画像設定
