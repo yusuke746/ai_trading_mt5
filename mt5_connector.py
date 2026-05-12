@@ -254,6 +254,37 @@ def _detect_swings(df: pd.DataFrame, window: int = 3) -> tuple[list[tuple[int, f
     return highs, lows
 
 
+def _detect_equal_levels(
+    swings: list[tuple[int, float]],
+    digits: int,
+    tolerance: float,
+    min_count: int = 2,
+) -> list[float]:
+    """Equal High / Equal Low レベルを検出する。
+
+    tolerance 以内に min_count 個以上のスウィングが集まった価格帯を返す。
+    単発のヒゲ先ではなく、複数回試された籠密性の高い流動性プールのみを検出する。
+    """
+    if len(swings) < min_count:
+        return []
+    prices = [v for _, v in swings]
+    eq_levels: list[float] = []
+    used = [False] * len(prices)
+    for i in range(len(prices)):
+        if used[i]:
+            continue
+        cluster = [prices[i]]
+        for j in range(i + 1, len(prices)):
+            if not used[j] and abs(prices[j] - prices[i]) <= tolerance:
+                cluster.append(prices[j])
+                used[j] = True
+        if len(cluster) >= min_count:
+            level = round(sum(cluster) / len(cluster), digits)
+            eq_levels.append(level)
+            used[i] = True
+    return eq_levels
+
+
 def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zones: int = 8) -> list[dict]:
     """3本足でFVGを検出して返す（軽量版）。"""
     zones: list[dict] = []
@@ -333,6 +364,8 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
                 "choch_levels": [],
                 "ob_zones": [],
                 "fvg_zones": [],
+                "eq_highs": [],
+                "eq_lows": [],
     }
 
     # PDH / PDL : D1の1本前確定足
@@ -358,6 +391,12 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
         result["swing_lows"] = lows[-5:]
         result["buy_liquidity"] = highs[-4:]
         result["sell_liquidity"] = lows[-4:]
+
+        # EQH / EQL: H1 ATR ベースの許容誤差内に複数スウィングが密集
+        atr_h1 = calculate_atr(df_h1, config.ATR_PERIOD)
+        eq_tol = atr_h1 * 0.2  # ATRの20%以内を「等値」とみなす
+        result["eq_highs"] = _detect_equal_levels(swings_h, digits, eq_tol)
+        result["eq_lows"]  = _detect_equal_levels(swings_l, digits, eq_tol)
 
         # BOS / CHoCH の簡易判定（H1確定足ベース）
         if len(swings_h) >= 2 and len(swings_l) >= 2 and len(df_h1) >= 3:

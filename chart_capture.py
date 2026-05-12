@@ -21,6 +21,11 @@ import mt5_connector
 
 logger = logging.getLogger(__name__)
 
+# ── SMCゾーン描画カラー定数 (TradingView準拠) ──────────────────────
+_SMC_BULL_COLOR = (0.149, 0.651, 0.604)   # #26a69a Emerald Green (Bullish)
+_SMC_BEAR_COLOR = (0.937, 0.325, 0.314)   # #ef5350 Soft Red       (Bearish)
+_SMC_FVG_COLOR  = (0.380, 0.337, 0.784)   # #6157c8 Purple         (Fair Value Gap)
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. MT5データからチャート画像を生成
@@ -251,6 +256,27 @@ def generate_smc_chart_base64(
         hlines_styles.append("dotted")
         hlines_widths.append(0.9)
 
+    # Equal Highs / Equal Lows: 複数スウィングが集まった高密度流動性クラスター
+    for lvl in smc.get("eq_highs", []):
+        try:
+            hlines_prices.append(float(lvl))
+            hlines_colors.append("#FFD700")   # Gold
+            hlines_styles.append("dashed")
+            hlines_widths.append(1.8)
+            line_labels.append((float(lvl), "EQH", "#FFD700"))
+        except (TypeError, ValueError):
+            pass
+
+    for lvl in smc.get("eq_lows", []):
+        try:
+            hlines_prices.append(float(lvl))
+            hlines_colors.append("#00CED1")   # Dark Turquoise
+            hlines_styles.append("dashed")
+            hlines_widths.append(1.8)
+            line_labels.append((float(lvl), "EQL", "#00CED1"))
+        except (TypeError, ValueError):
+            pass
+
     # 無効化ライン (エグジット用): 太い赤実線
     if invalidation_price is not None:
         hlines_prices.append(float(invalidation_price))
@@ -293,30 +319,44 @@ def generate_smc_chart_base64(
         **plot_kwargs,
     )
 
-    # ── OBゾーン・FVGゾーンをfill_betweenで描画 ──
     ax_main = axes[0]
-    x_indices = np.arange(len(ohlc))
+
+    # グリッド: 最小限 (ローソク足を主役に)
+    for ax in axes:
+        ax.grid(True, alpha=0.1, linewidth=0.4, linestyle="-", color="gray")
+
+    # ラベル右余白: PDH/PDL等テキストが y軸と重ならないよう確保
+    _label_margin = 5  # バー5本分
+    ax_main.set_xlim(right=len(ohlc) - 1 + _label_margin)
+
+    # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
+    x_indices = np.arange(len(ohlc))  # 互換性のため保持
 
     ob_zones: list[dict] = smc.get("ob_zones", [])
     fvg_zones: list[dict] = smc.get("fvg_zones", [])
+
+    box_width = len(ohlc) - 1
 
     for zone in ob_zones:
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
             zone_type = str(zone.get("type", "bull")).lower()
-            color = "rgba(0,200,100,0.15)" if zone_type == "bull" else "rgba(220,50,50,0.15)"
-            # matplotlibはrgba文字列不可 → (r,g,b,a) tupleに変換
-            if zone_type == "bull":
-                fc = (0.0, 0.78, 0.39, 0.15)
-                ec = (0.0, 0.78, 0.39, 0.6)
-            else:
-                fc = (0.86, 0.20, 0.20, 0.15)
-                ec = (0.86, 0.20, 0.20, 0.6)
-            ax_main.fill_between(x_indices, lo, hi, alpha=0.15,
-                                 facecolor=fc[:3], edgecolor=ec[:3], linewidth=0.5)
-            ax_main.axhline(y=hi, color=ec[:3], linewidth=0.6, linestyle="--", alpha=0.7)
-            ax_main.axhline(y=lo, color=ec[:3], linewidth=0.6, linestyle="--", alpha=0.7)
+            color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
+            # Mitigation: 終値が完全に貫通したゾーンは透明度を落として「使用済み」表示
+            mitigated = (current_close < lo) if zone_type == "bull" else (current_close > hi)
+            face_alpha = 0.05 if mitigated else 0.18
+            edge_alpha = 0.25 if mitigated else 0.75
+            rect = mpatches.Rectangle(
+                xy=(0, lo),
+                width=box_width,
+                height=hi - lo,
+                linewidth=0.8,
+                edgecolor=(*color, edge_alpha),
+                facecolor=(*color, face_alpha),
+                zorder=2,
+            )
+            ax_main.add_patch(rect)
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("OBゾーン描画スキップ: %s", e)
 
@@ -324,10 +364,20 @@ def generate_smc_chart_base64(
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
-            # FVG: シアン系で塗りつぶし
-            ax_main.fill_between(x_indices, lo, hi, alpha=0.12,
-                                 facecolor=(0.0, 0.75, 0.85), edgecolor=(0.0, 0.6, 0.8),
-                                 linewidth=0.5)
+            # FVG Mitigation: 価格がゾーン内に入っている = 充填中
+            fvg_mitigated = lo <= current_close <= hi
+            face_alpha = 0.05 if fvg_mitigated else 0.11
+            edge_alpha = 0.30 if fvg_mitigated else 0.55
+            rect = mpatches.Rectangle(
+                xy=(0, lo),
+                width=box_width,
+                height=hi - lo,
+                linewidth=0.6,
+                edgecolor=(*_SMC_FVG_COLOR, edge_alpha),
+                facecolor=(*_SMC_FVG_COLOR, face_alpha),
+                zorder=2,
+            )
+            ax_main.add_patch(rect)
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
 
@@ -335,7 +385,7 @@ def generate_smc_chart_base64(
     x_right = len(ohlc) - 1
     for price, label, color in line_labels:
         ax_main.text(
-            x_right + 0.15,
+            x_right + 0.6,
             price,
             label,
             color=color,
@@ -346,18 +396,20 @@ def generate_smc_chart_base64(
             zorder=10,
         )
 
-    # ── 凡例: 線種/色の意味を画像内に明示 ──
+    # ── 凡例: 枠なし・半透明背景 ──
     legend_handles = [
         Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid", label="BOS"),
         Line2D([0], [0], color="black", lw=1.2, ls="solid", label="MA20"),
         Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH"),
         Line2D([0], [0], color="deepskyblue", lw=1.0, ls="dotted", label="Liquidity (Buy-side)"),
         Line2D([0], [0], color="firebrick", lw=1.0, ls="dotted", label="Liquidity (Sell-side)"),
-        mpatches.Patch(facecolor=(0.0, 0.78, 0.39), alpha=0.20, label="OB (Bullish)"),
-        mpatches.Patch(facecolor=(0.86, 0.20, 0.20), alpha=0.20, label="OB (Bearish)"),
-        mpatches.Patch(facecolor=(0.0, 0.75, 0.85), alpha=0.18, label="FVG"),
+        mpatches.Patch(facecolor=_SMC_BULL_COLOR, alpha=0.20, label="OB (Bullish)"),
+        mpatches.Patch(facecolor=_SMC_BEAR_COLOR, alpha=0.20, label="OB (Bearish)"),
+        mpatches.Patch(facecolor=_SMC_FVG_COLOR, alpha=0.18, label="FVG"),
         Line2D([0], [0], color="gold", lw=1.0, ls="dashed", label="PDH/PDL"),
         Line2D([0], [0], color="orchid", lw=1.0, ls="dashed", label="PWH/PWL"),
+        Line2D([0], [0], color="#FFD700", lw=1.8, ls="dashed", label="Equal Highs (EQH)"),
+        Line2D([0], [0], color="#00CED1", lw=1.8, ls="dashed", label="Equal Lows (EQL)"),
     ]
     if invalidation_price is not None:
         legend_handles.append(
@@ -367,8 +419,10 @@ def generate_smc_chart_base64(
         handles=legend_handles,
         loc="upper left",
         fontsize=7,
-        framealpha=0.85,
+        framealpha=0.55,
         facecolor="white",
+        edgecolor="none",
+        borderpad=0.6,
     )
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")
