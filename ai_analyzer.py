@@ -212,9 +212,8 @@ alignment は「H1トレンド方向とエントリー方向が一致してい�
     "smc_fvg_present": true or false,
     "reasoning": "判断理由（チャートで確認した構造を簡潔に）",
     "news_impact": "N/A (news_monitorにて別管理)",
-    "sl_distance": SL幅の数値(price単位)。Sweep起点のさらに外側(ヒゲ対策バッファを加えた位置)に置くハードストップ幅。MT5のストップロス注文として設定され、ヒゲ1本でも触れた瞬間に即クローズする。,
     "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上)。チャートの構造レベル(次のOB/FVG/流動性/PDH/PDL)までの距離。,
-    "invalidation_price": SMC構造が完全に崩壊する具体的な価格(数値)。※SLとは別物。Sweepされた流動性レベル自体(例: swept_level=101.31ならば101.31付近)を返すこと。M15確定足の終値がこの価格を割った(BUY)/超えた(SELL)場合にシステムが強制EXITする。SLより手前の構造的な崩壊ラインであり、sl_distanceから計算した価格と同じ値にしてはいけない
+    "invalidation_price": SMC構造が完全に崩壊する具体的な価格(数値)。Sweepされた流動性レベル自体(例: swept_level=29117.86ならば29117.86付近)を返すこと。M15確定足の終値がこの価格を割った(BUY)/超えた(SELL)場合にシステムが強制EXITする
 }}
 
 必ずJSON形式のみで回答してください。"""
@@ -515,9 +514,8 @@ def _run_entry_final_approval(symbol: str, current_price: float,
     "smc_fvg_present": true or false,
     "reasoning": "承認/否決の理由",
     "news_impact": "ニュース評価",
-    "sl_distance": 数値(Sweep起点のさらに外側のハードストップ幅),
     "tp_distance": 数値,
-    "invalidation_price": SMC構造崩壊の無効化ライン価格(数値)。※SLより手前のSweepされた流動性レベル自体。sl_distanceから計算した価格と同じ値にしてはいけない
+    "invalidation_price": SMC構造崩壊の無効化ライン価格(数値)。Sweepされた流動性レベル自体。M15確定足の終値がこの価格を割った(BUY)/超えた(SELL)場合にシステムが強制EXIT
 }}"""
 
     try:
