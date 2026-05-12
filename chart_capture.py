@@ -341,7 +341,7 @@ def generate_smc_chart_base64(
         type="candle",
         style=style,
         addplot=add_plots,
-        volume=True,
+        volume=False,
         title=title,
         figsize=fig_size,
         returnfig=True,

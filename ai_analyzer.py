@@ -180,16 +180,26 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
 - 口座残高: ¥{balance:,.0f}
 {gold_safety_note}
 {setup_condition}
+【alignmentフィールドのルール (重要)】
+alignment は「H1トレンド方向とエントリー方向が一致しているか」を示すフラグです。
+  - h1_trend="UP"   かつ decision="BUY"  → alignment=true  (上昇トレンドに乗る順張り)
+  - h1_trend="DOWN" かつ decision="SELL" → alignment=true  (下降トレンドに乗る順張り)
+  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中の逆張りSELL = トレンド不一致)
+  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中の逆張りBUY  = トレンド不一致)
+⚠️ h1_trend="UP"+decision="SELL" で alignment=true と回答するのは論理的に誤りです。必ずfalseとしてください。
+
 【SKIP条件 (1つでも該当したらSKIP)】
 - confidence < 70
 - h1_trend = SIDEWAYS
 - H1とM15のトレンドが不一致 (alignment=false)
+- h1_trend="UP" かつ decision="SELL" (上昇トレンド中の逆張りSELL → alignment=falseとなり上記に該当)
+- h1_trend="DOWN" かつ decision="BUY" (下降トレンド中の逆張りBUY → alignment=falseとなり上記に該当)
 - 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
 - 逆張り: smc_liquidity_sweep=false
 - 順張り: smc_ob_confirmed=false
 - 外部ニュース監視で重大リスクが検知されている場合
 
-【回答フォーマット (JSONのみ)】
+【回答フォーマット (JSONのみ・コメント不要)】
 {{
     "decision": "BUY" or "SELL" or "SKIP",
     "confidence": 0-100,
@@ -202,6 +212,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
     "smc_fvg_present": true or false,
     "reasoning": "判断理由（チャートで確認した構造を簡潔に）",
     "news_impact": "N/A (news_monitorにて別管理)",
+    "sl_distance": SL幅の数値(price単位)。Sweep起点の外側に置く構造的SL幅。,
     "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上)。チャートの構造レベル(次のOB/FVG/流動性/PDH/PDL)までの距離。,
     "invalidation_price": このエントリーのSMC構造が完全に崩壊する具体的な価格(数値)
 }}
@@ -426,6 +437,11 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
         skip_reasons.append("h1_sideways")
     if not signal.alignment:
         skip_reasons.append("trend_misalignment")
+    # H1トレンド × エントリー方向の矛盾チェック (AIがalignment=trueと誤報告した場合も捕捉)
+    if signal.h1_trend == "UP" and signal.decision == "SELL":
+        skip_reasons.append("h1_up_but_sell")
+    if signal.h1_trend == "DOWN" and signal.decision == "BUY":
+        skip_reasons.append("h1_down_but_buy")
     # mechanical_rr / mechanical_bos は main.py で AI呼び出し前にチェック済み
     # ここでは重複チェックしない
 
@@ -474,6 +490,11 @@ def _run_entry_final_approval(symbol: str, current_price: float,
 - reasoning: {primary_signal.reasoning[:300]}
 - sl_distance: {primary_signal.sl_distance} / tp_distance: {primary_signal.tp_distance}
 - 現在価格: {current_price} / M15 ATR: {atr_m15:.5f} / H1 ATR: {atr_h1:.5f}
+
+【alignmentルール (必須)】
+  h1_trend="UP"+decision="SELL" → alignment=false (上昇トレンド中のSELL = 不一致)
+  h1_trend="DOWN"+decision="BUY" → alignment=false (下降トレンド中のBUY = 不一致)
+  alignment=false の場合は必ず SKIP としてください。
 
 【承認チェック (すべてYESでのみ承認)】
   ① チャート上でLiquidity Sweepが本物か (ヒゲタッチだけでなく明確な侵食か)

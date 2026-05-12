@@ -258,7 +258,7 @@ POST_RECOVERY_LOT_MULTIPLIER   = float(os.getenv("POST_RECOVERY_LOT_MULTIPLIER",
 # ──────────────────────────────────────
 CHART_BARS = 100        # 生成チャートに表示するバー数
 CHART_WIDTH = 1200      # px
-CHART_HEIGHT = 700      # px
+CHART_HEIGHT = 750      # px (Volumeパネル廃止でメインパネル高さを拡張)
 # 描画密度制御: 現在価格に近い順で表示する最大本数
 SMC_DRAW_MAX_LIQUIDITY_PER_SIDE = max(1, int(os.getenv("SMC_DRAW_MAX_LIQUIDITY_PER_SIDE", "3")))
 SMC_DRAW_MAX_SWING_PER_SIDE = max(1, int(os.getenv("SMC_DRAW_MAX_SWING_PER_SIDE", "6")))
