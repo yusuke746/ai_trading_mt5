@@ -22,9 +22,11 @@ import mt5_connector
 logger = logging.getLogger(__name__)
 
 # ── SMCゾーン描画カラー定数 (TradingView準拠) ──────────────────────
-_SMC_BULL_COLOR = (0.149, 0.651, 0.604)   # #26a69a Emerald Green (Bullish)
-_SMC_BEAR_COLOR = (0.937, 0.325, 0.314)   # #ef5350 Soft Red       (Bearish)
-_SMC_FVG_COLOR  = (0.380, 0.337, 0.784)   # #6157c8 Purple         (Fair Value Gap)
+_SMC_BULL_COLOR        = (0.149, 0.651, 0.604)   # #26a69a Emerald Green (Bullish)
+_SMC_BEAR_COLOR        = (0.937, 0.325, 0.314)   # #ef5350 Soft Red       (Bearish)
+_SMC_FVG_COLOR         = (0.380, 0.337, 0.784)   # #6157c8 Purple         (Fair Value Gap)
+_SMC_CONF_BULL_COLOR   = (1.000, 0.843, 0.000)   # #FFD700 Gold           (H1+M15 Confluence Bull)
+_SMC_CONF_BEAR_COLOR   = (1.000, 0.500, 0.000)   # #FF8000 Orange         (H1+M15 Confluence Bear)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -210,12 +212,22 @@ def generate_smc_chart_base64(
         hlines_styles.append("solid")
         hlines_widths.append(1.2)
 
-    # CHoCH: オレンジの破線
+    # CHoCH (H1): オレンジの破線
     for lvl in choch_levels:
         hlines_prices.append(float(lvl))
         hlines_colors.append("darkorange")
         hlines_styles.append("dashed")
         hlines_widths.append(1.2)
+
+    # CHoCH (M15): コーラルの一点鎖線 — H1 CHoCHより細めの局面構造変化
+    for lvl in smc.get("m15_choch_levels", []):
+        try:
+            hlines_prices.append(float(lvl))
+            hlines_colors.append("coral")
+            hlines_styles.append((0, (3, 1, 1, 1)))  # 一点鎖線
+            hlines_widths.append(1.0)
+        except (TypeError, ValueError):
+            pass
 
     # Buy-side / Sell-side Liquidity: 点線
     for lvl in _pick_near_levels(
@@ -388,7 +400,7 @@ def generate_smc_chart_base64(
 
     ob_zones: list[dict] = smc.get("ob_zones", [])
     fvg_zones: list[dict] = smc.get("fvg_zones", [])
-
+    h1_ob_zones: list[dict] = smc.get("h1_ob_zones", [])
     # OBゾーンは右3/4のみ描画（左1/4はゾーン塗りつぶしで視認性が落ちるため）
     _ob_start_x = len(ohlc) // 4
     box_width = len(ohlc) - 1 - _ob_start_x
@@ -400,23 +412,40 @@ def generate_smc_chart_base64(
             if not (_draw_lo <= lo <= _draw_hi or _draw_lo <= hi <= _draw_hi):
                 continue  # 描画範囲外のゾーンはスキップ
             zone_type = str(zone.get("type", "bull")).lower()
-            color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
+
+            # H1 OBとのコンフルエンス判定: 同種・価格帯重複
+            is_confluence = any(
+                str(h1z.get("type", "")).lower() == zone_type
+                and float(h1z["low"]) < hi
+                and float(h1z["high"]) > lo
+                for h1z in h1_ob_zones
+            )
+
+            if is_confluence:
+                color = _SMC_CONF_BULL_COLOR if zone_type == "bull" else _SMC_CONF_BEAR_COLOR
+            else:
+                color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
+
             # Mitigation: 終値が完全に貫通したゾーンは透明度を落として「使用済み」表示
             mitigated = (current_close < lo) if zone_type == "bull" else (current_close > hi)
-            face_alpha = 0.05 if mitigated else 0.18
-            edge_alpha = 0.25 if mitigated else 0.75
+            face_alpha = 0.05 if mitigated else (0.28 if is_confluence else 0.18)
+            edge_alpha = 0.25 if mitigated else (1.0  if is_confluence else 0.75)
+            linewidth  = 0.8 if not is_confluence else 1.8
             rect = mpatches.Rectangle(
                 xy=(_ob_start_x, lo),
                 width=box_width,
                 height=hi - lo,
-                linewidth=0.8,
+                linewidth=linewidth,
                 edgecolor=(*color, edge_alpha),
                 facecolor=(*color, face_alpha),
                 zorder=2,
             )
             ax_main.add_patch(rect)
             # AIが種別を認識できるようにゾーン右端にラベルを添付
-            label_text = ("Bull OB" if zone_type == "bull" else "Bear OB") + (" [M]" if mitigated else "")
+            if is_confluence:
+                label_text = ("★ H.Prob Bull OB" if zone_type == "bull" else "★ H.Prob Bear OB") + (" [M]" if mitigated else "")
+            else:
+                label_text = ("Bull OB" if zone_type == "bull" else "Bear OB") + (" [M]" if mitigated else "")
             ax_main.text(
                 (_ob_start_x + box_width) * 0.98,
                 (hi + lo) / 2,
@@ -494,13 +523,15 @@ def generate_smc_chart_base64(
 
     # ── 凡例: 枠なし・半透明背景 ──
     legend_handles = [
-        Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid", label="BOS"),
-        Line2D([0], [0], color="black", lw=1.2, ls="solid", label="MA20"),
-        Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH"),
+        Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid",  label="BOS (H1)"),
+        Line2D([0], [0], color="black",      lw=1.2, ls="solid",  label="MA20"),
+        Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH (H1)"),
+        Line2D([0], [0], color="coral",      lw=1.0, ls=(0,(3,1,1,1)), label="CHoCH (M15)"),
         Line2D([0], [0], color="deepskyblue", lw=1.0, ls="dotted", label="Liquidity (Buy-side)"),
         Line2D([0], [0], color="firebrick", lw=1.0, ls="dotted", label="Liquidity (Sell-side)"),
         mpatches.Patch(facecolor=_SMC_BULL_COLOR, alpha=0.20, label="OB (Bullish)"),
         mpatches.Patch(facecolor=_SMC_BEAR_COLOR, alpha=0.20, label="OB (Bearish)"),
+        mpatches.Patch(facecolor=_SMC_CONF_BULL_COLOR, alpha=0.35, label="★ H.Prob OB (H1+M15)"),
         mpatches.Patch(facecolor=_SMC_FVG_COLOR, alpha=0.18, label="FVG"),
         Line2D([0], [0], color="gold", lw=1.0, ls="dashed", label="PDH/PDL"),
         Line2D([0], [0], color="orchid", lw=1.0, ls="dashed", label="PWH/PWL"),

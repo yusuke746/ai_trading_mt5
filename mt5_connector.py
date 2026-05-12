@@ -366,6 +366,8 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
                 "fvg_zones": [],
                 "eq_highs": [],
                 "eq_lows": [],
+                "h1_ob_zones": [],
+                "m15_choch_levels": [],
     }
 
     # PDH / PDL : D1の1本前確定足
@@ -423,12 +425,35 @@ def get_price_levels(symbol: str, digits: int = 5) -> dict:
                 if confirmed_close > last_high:
                     result["choch_levels"] = [round(last_high, digits)]
 
+        # H1ベースのOBゾーン（コンフルエンス検出用）
+        result["h1_ob_zones"] = _detect_ob_zones(df_h1, digits=digits, atr=atr_h1, lookback=100, max_zones=3)
+
     # M15ベースのOB/FVGゾーン
     df_m15 = get_rates(symbol, "M15", 260)
     if df_m15 is not None and len(df_m15) >= 20:
         atr_m15 = calculate_atr(df_m15, config.ATR_PERIOD)
         result["ob_zones"] = _detect_ob_zones(df_m15, digits=digits, atr=atr_m15)
         result["fvg_zones"] = _detect_fvg_zones(df_m15, digits=digits)
+
+        # M15ベースのCHoCH判定 (ウィンドウ=2本、小さい局面構造の変化を捕捉)
+        m15_swings_h, m15_swings_l = _detect_swings(df_m15, window=2)
+        if len(m15_swings_h) >= 2 and len(m15_swings_l) >= 2:
+            m15_prev_high = m15_swings_h[-2][1]
+            m15_last_high = m15_swings_h[-1][1]
+            m15_prev_low  = m15_swings_l[-2][1]
+            m15_last_low  = m15_swings_l[-1][1]
+            m15_confirmed = float(df_m15["close"].iloc[-2])
+
+            m15_trend = "RANGE"
+            if m15_last_high > m15_prev_high and m15_last_low > m15_prev_low:
+                m15_trend = "UP"
+            elif m15_last_high < m15_prev_high and m15_last_low < m15_prev_low:
+                m15_trend = "DOWN"
+
+            if m15_trend == "UP" and m15_confirmed < m15_last_low:
+                result["m15_choch_levels"] = [round(m15_last_low, digits)]
+            elif m15_trend == "DOWN" and m15_confirmed > m15_last_high:
+                result["m15_choch_levels"] = [round(m15_last_high, digits)]
 
     return result
 
