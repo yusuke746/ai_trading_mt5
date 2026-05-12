@@ -361,7 +361,7 @@ def generate_smc_chart_base64(
         ax.grid(True, alpha=0.1, linewidth=0.4, linestyle="-", color="gray")
 
     # ラベル右余白: PDH/PDL等テキストが y軸と重ならないよう確保
-    _label_margin = 5  # バー5本分
+    _label_margin = 8  # バー8本分（ラベル密集回避のため余白を広めに）
     ax_main.set_xlim(right=len(ohlc) - 1 + _label_margin)
     # Y軸を明示固定 (遠距離hline描画後でもローソク足が画面に収まるよう)
     ax_main.set_ylim(_draw_lo, _draw_hi)
@@ -470,13 +470,13 @@ def generate_smc_chart_base64(
     # ── 主要ライン右端ラベル (PDH/PDL/PWH/PWL/INV/SWEEP) ──
     # 密集回避: 近接ラベルをY方向にずらす
     x_right = len(ohlc) - 1
-    _min_label_gap = _price_span * 0.025  # 表示範囲の2.5%以内は「密集」とみなす
+    _min_label_gap = _price_span * 0.035  # 表示範囲の3.5%以内は「密集」とみなす
     _used_y: list[float] = []  # 使用済みY位置トラッキング
     for price, label, color in sorted(line_labels, key=lambda x: x[0]):
         # 密集チェック: 既存ラベルとの最小距離を確保
         disp_y = price
         attempts = 0
-        while any(abs(disp_y - used) < _min_label_gap for used in _used_y) and attempts < 6:
+        while any(abs(disp_y - used) < _min_label_gap for used in _used_y) and attempts < 10:
             disp_y += _min_label_gap * (1 if attempts % 2 == 0 else -1) * ((attempts // 2) + 1)
             attempts += 1
         _used_y.append(disp_y)
