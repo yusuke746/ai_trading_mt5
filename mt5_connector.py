@@ -2,7 +2,7 @@
 
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
 import numpy as np
@@ -285,7 +285,7 @@ def _detect_equal_levels(
     return eq_levels
 
 
-def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zones: int = 8) -> list[dict]:
+def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zones: int = 3) -> list[dict]:
     """3本足でFVGを検出して返す（軽量版）。"""
     zones: list[dict] = []
     if df is None or len(df) < 6:
@@ -315,7 +315,7 @@ def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zo
     return zones[-max_zones:]
 
 
-def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 180, max_zones: int = 6) -> list[dict]:
+def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 180, max_zones: int = 3) -> list[dict]:
     """直後のディスプレイスメントでOBを近似検出して返す（軽量版）。"""
     zones: list[dict] = []
     if df is None or len(df) < 8:
@@ -516,7 +516,13 @@ def get_closed_deal_by_ticket(ticket: int) -> dict | None:
     }
     exit_reason = _REASON_MAP.get(close_deal.reason, f"MT5_REASON_{close_deal.reason}")
 
-    closed_at = datetime.utcfromtimestamp(close_deal.time).isoformat()
+    # time_msc はミリ秒 Unix タイムスタンプ（UTC epoch）。
+    # utcfromtimestamp はナイーブUTCを返すが、念のためtzinfo付きで統一する。
+    _ts_sec = getattr(close_deal, "time_msc", None)
+    if _ts_sec:
+        closed_at = datetime.fromtimestamp(_ts_sec / 1000, tz=timezone.utc).replace(tzinfo=None).isoformat()
+    else:
+        closed_at = datetime.utcfromtimestamp(close_deal.time).isoformat()
     return {
         "exit_price": close_deal.price,
         "profit":     close_deal.profit,

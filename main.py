@@ -472,8 +472,10 @@ def _check_entry(symbol: str):
     if streak >= config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER and last_closed_at:
         try:
             last_dt = _as_utc(datetime.fromisoformat(last_closed_at))
-            elapsed_min = max(0.0, (datetime.now(UTC) - last_dt).total_seconds() / 60)
-            if elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
+            elapsed_min = (datetime.now(UTC) - last_dt).total_seconds() / 60
+            if elapsed_min < 0:
+                pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
+            elif elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
                 remaining_min = config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES - elapsed_min
                 logger.warning(
                     "[Entry] %s: 直近%d連敗のためクールダウン中 (残り%.0f/%.0f min) → スキップ",
@@ -495,9 +497,11 @@ def _check_entry(symbol: str):
         if closed_at:
             try:
                 last_closed_dt = _as_utc(datetime.fromisoformat(closed_at))
-                elapsed_min = max(0.0, (datetime.now(UTC) - last_closed_dt).total_seconds() / 60)
+                elapsed_min = (datetime.now(UTC) - last_closed_dt).total_seconds() / 60
                 block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS
-                if elapsed_min < block_minutes:
+                if elapsed_min < 0:
+                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
+                elif elapsed_min < block_minutes:
                     remaining_min = block_minutes - elapsed_min
                     logger.warning(
                         "[Entry] %s: 同銘柄クールダウン中(全Exit) 残り%.0f/%.0f min (%d bars, reason=%s) → スキップ",
@@ -518,9 +522,11 @@ def _check_entry(symbol: str):
         if win_closed_at:
             try:
                 last_win_dt = _as_utc(datetime.fromisoformat(win_closed_at))
-                elapsed_min = max(0.0, (datetime.now(UTC) - last_win_dt).total_seconds() / 60)
+                elapsed_min = (datetime.now(UTC) - last_win_dt).total_seconds() / 60
                 block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS
-                if elapsed_min < block_minutes:
+                if elapsed_min < 0:
+                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
+                elif elapsed_min < block_minutes:
                     remaining_min = block_minutes - elapsed_min
                     logger.warning(
                         "[Entry] %s: 勝ち後クールダウン中 残り%.0f/%.0f min (%d bars, profit=%.0f) → スキップ",
@@ -627,9 +633,11 @@ def _check_entry(symbol: str):
         if closed_at:
             try:
                 last_break_dt = _as_utc(datetime.fromisoformat(closed_at))
-                elapsed_min = max(0.0, (datetime.now(UTC) - last_break_dt).total_seconds() / 60)
+                elapsed_min = (datetime.now(UTC) - last_break_dt).total_seconds() / 60
                 block_minutes = _timeframe_to_minutes(config.EXECUTION_TF) * config.PREMISE_BREAK_REENTRY_BLOCK_BARS
-                if elapsed_min < block_minutes:
+                if elapsed_min < 0:
+                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
+                elif elapsed_min < block_minutes:
                     remaining_min = block_minutes - elapsed_min
                     logger.warning(
                         "[Entry] %s: PREMISE_BREAK後の同方向再エントリー禁止中 (%s 残り%.0f/%.0f min, %d bars) → スキップ",

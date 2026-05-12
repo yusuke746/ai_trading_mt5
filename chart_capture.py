@@ -151,12 +151,12 @@ def generate_smc_chart_base64(
     smc = smc_features or {}
     current_close = float(ohlc["Close"].iloc[-1])
 
-    # Y軸描画範囲: OHLCローソク足実体 ± 30% (遠距離hlineによるY軸圧縮を防ぐ)
+    # Y軸描画範囲: OHLCローソク足実体 ± 10% (遠距離hlineによるY軸圧縮を防ぐ)
     _ohlc_hi = float(ohlc["High"].max())
     _ohlc_lo = float(ohlc["Low"].min())
     _price_span = max(_ohlc_hi - _ohlc_lo, 1e-10)
-    _draw_hi = _ohlc_hi + _price_span * 0.30
-    _draw_lo = _ohlc_lo - _price_span * 0.30
+    _draw_hi = _ohlc_hi + _price_span * 0.10
+    _draw_lo = _ohlc_lo - _price_span * 0.10
 
     def _pick_near_levels(levels: list, max_count: int) -> list[float]:
         """現在価格に近いレベルを優先して上位N本だけ返す。"""
