@@ -342,6 +342,49 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     # nano には補助判定(反転シグナル有無)のみを依頼する。
     inv_text = f"{invalidation_price:.5f}" if invalidation_price is not None else "N/A"
 
+    _LONG_HOLD_THRESHOLD_MIN = 120
+
+    if safe_hold_minutes >= _LONG_HOLD_THRESHOLD_MIN:
+        task_section = f"""【task】
+保有時間が {safe_hold_minutes} 分に達しています。以下の2点を評価してください。
+
+1. TP目前での反転シグナル
+   - 明確な反転シグナルがある場合: decision="EXIT"
+
+2. エントリー根拠の継続有効性（長時間保有チェック）
+   - 下記の状況が1つでも確認できる場合: decision="EXIT", entry_premise_valid=false
+     a) エントリーの根拠となったOB/BOS/MSSが現在の価格アクションで否定されている
+     b) トレンド構造がエントリー方向と逆のCHoCHを形成している
+     c) 価格がTP方向へ長時間進まず、明らかに横ばい・押し戻しを繰り返している
+   - 根拠が継続して有効: entry_premise_valid=true
+
+どちらにも該当しない場合: decision="HOLD"
+
+【output JSON only】
+{{
+    "decision": "HOLD" or "EXIT",
+    "confidence": 0-100,
+    "entry_premise_valid": true or false,
+    "invalidation_breached": false,
+    "reasoning": "短く1文で理由（長時間保有起因の場合はその旨を明記）",
+    "news_impact": "N/A (news_monitor managed)"
+}}"""
+    else:
+        task_section = """【task】
+M15画像から「TP目前での反転シグナル」が明確かだけ評価してください。
+- 反転シグナルが明確: decision="EXIT"
+- 明確でない: decision="HOLD"
+
+【output JSON only】
+{
+    "decision": "HOLD" or "EXIT",
+    "confidence": 0-100,
+    "entry_premise_valid": true,
+    "invalidation_breached": false,
+    "reasoning": "短く1文で理由",
+    "news_impact": "N/A (news_monitor managed)"
+}"""
+
     prompt = f"""あなたはSMCトレードの補助監視AIです。
 この判定は『補助』です。最終判断はシステム側の機械判定が優先されます。
 
@@ -364,20 +407,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
 【entry rationale】
 {entry_reasoning[:300] if entry_reasoning else 'N/A'}
 
-【task】
-M15画像から「TP目前での反転シグナル」が明確かだけ評価してください。
-- 反転シグナルが明確: decision="EXIT"
-- 明確でない: decision="HOLD"
-
-【output JSON only】
-{{
-    "decision": "HOLD" or "EXIT",
-    "confidence": 0-100,
-    "entry_premise_valid": true,
-    "invalidation_breached": false,
-    "reasoning": "短く1文で理由",
-    "news_impact": "N/A (news_monitor managed)"
-}}"""
+{task_section}"""
 
     try:
         client = _get_client()

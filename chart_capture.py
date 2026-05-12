@@ -219,13 +219,12 @@ def generate_smc_chart_base64(
         hlines_styles.append("dashed")
         hlines_widths.append(1.2)
 
-    # CHoCH (M15): コーラルの一点鎖線 — H1 CHoCHより細めの局面構造変化
+    # CHoCH (M15): mplfinanceのhlines validatorはタプル形式linestyleを受け付けないため
+    # post-plotのax.axhline()で別途描画する（_m15_choch_draw_levels に収集）
+    _m15_choch_draw_levels: list[float] = []
     for lvl in smc.get("m15_choch_levels", []):
         try:
-            hlines_prices.append(float(lvl))
-            hlines_colors.append("coral")
-            hlines_styles.append((0, (3, 1, 1, 1)))  # 一点鎖線
-            hlines_widths.append(1.0)
+            _m15_choch_draw_levels.append(float(lvl))
         except (TypeError, ValueError):
             pass
 
@@ -377,6 +376,11 @@ def generate_smc_chart_base64(
     ax_main.set_xlim(right=len(ohlc) - 1 + _label_margin)
     # Y軸を明示固定 (遠距離hline描画後でもローソク足が画面に収まるよう)
     ax_main.set_ylim(_draw_lo, _draw_hi)
+
+    # M15 CHoCH: コーラルの一点鎖線 (post-plot描画 — タプルlinestyleはhlines非対応)
+    for _lvl in _m15_choch_draw_levels:
+        if _draw_lo <= _lvl <= _draw_hi:
+            ax_main.axhline(_lvl, color="coral", linewidth=1.0, linestyle=(0, (3, 1, 1, 1)), zorder=6, alpha=0.85)
 
     # 現在価格ライン: 黄色の点線 + 右端に価格ラベル
     _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
