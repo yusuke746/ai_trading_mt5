@@ -54,6 +54,40 @@ python main.py
 - `EMERGENCY_EXIT_*`
 - `PROFIT_PROTECTION_*`
 
+## デモ環境から別環境への引き継ぎ
+
+学習済みの confidence 閾値（`adaptive_params.json`）を新環境にコピーすることで、デモ環境のパラメータをそのままの状態で引き継げます。
+
+### 手順
+
+1. デモ環境の `analytics/adaptive_params.json` を新環境の同ディレクトリにコピー
+2. 必要に応じて `trades.db` も同様にコピー（履歴があると Lookback 期間の統計が即使用可能）
+3. `.env` は環境ごとに新規作成（MT5 ログイン情報・APIキー等が異なるため）
+
+```
+# コピーが必要なファイル
+analytics/adaptive_params.json   ← 学習済み閾値（必須）
+trades.db                         ← トレード履歴（任意）
+
+# 環境ごとに作り直すファイル
+.env                              ← APIキー・MT5接続情報
+```
+
+### コピーしない場合の初期値
+
+`adaptive_params.json` がない場合、起動時に自動でデフォルト値が使われます。
+
+```
+global_confidence_threshold = ADAPTIVE_CONF_MIN (デフォルト: 70)
+buckets = {} (空)
+```
+
+その後、`ADAPTIVE_MIN_SAMPLES`（デフォルト: 10件）のトレードが溜まると、週次で自動更新されます。
+
+### 引き継ぎ後の挙動
+
+コピーした `adaptive_params.json` の閾値は初期値として使われますが、新環境でのトレード実績が蓄積されると次の週次更新サイクルで上書きされ、新環境の実績に基づいて独立して育っていきます。
+
 ## 注意
 - `.env` は機密情報を含むため Git 管理しない
 - 実運用前にデモ口座で十分に検証する
