@@ -690,6 +690,8 @@ def _check_entry(symbol: str):
     h1_b64, m15_b64 = chart_capture.generate_smc_chart_pair_base64(
         symbol=symbol,
         smc_features=smc_data,
+        swept_level=mech_swept_level,
+        swept_type=mech_sweep_type,
     )
     if h1_b64 is None or m15_b64 is None:
         logger.warning("[Entry] %s: チャート画像生成失敗", symbol)

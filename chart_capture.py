@@ -103,6 +103,8 @@ def generate_smc_chart_base64(
     smc_features: dict | None = None,
     invalidation_price: float | None = None,
     bars: int = config.CHART_BARS,
+    swept_level: float | None = None,
+    swept_type: str | None = None,
 ) -> str | None:
     """SMC特徴量をオーバーレイしたローソク足チャートを生成し、base64文字列で返す。
 
@@ -284,6 +286,16 @@ def generate_smc_chart_base64(
         except (TypeError, ValueError):
             pass
 
+    # スイープされたレベル: 太い点線 (HIGH→赤橙, LOW→青緑)
+    if swept_level is not None:
+        _sw_color = "#FF6B35" if str(swept_type).upper() == "HIGH" else "#00E676"
+        hlines_prices.append(float(swept_level))
+        hlines_colors.append(_sw_color)
+        hlines_styles.append("dashed")
+        hlines_widths.append(2.0)
+        _sw_label = f"SWEEP({'↑HIGH' if str(swept_type).upper() == 'HIGH' else '↓LOW'})"
+        line_labels.append((float(swept_level), _sw_label, _sw_color))
+
     # 無効化ライン (エグジット用): 太い赤実線
     if invalidation_price is not None:
         hlines_prices.append(float(invalidation_price))
@@ -354,13 +366,32 @@ def generate_smc_chart_base64(
     # Y軸を明示固定 (遠距離hline描画後でもローソク足が画面に収まるよう)
     ax_main.set_ylim(_draw_lo, _draw_hi)
 
+    # 現在価格ライン: 黄色の点線 + 右端に価格ラベル
+    _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
+    _price_fmt = f"{current_close:.{min(_digits, 5)}f}"
+    ax_main.axhline(current_close, color="#FFD700", linewidth=1.2, linestyle=(0, (4, 2)), zorder=9, alpha=0.9)
+    ax_main.text(
+        len(ohlc) - 1 + 0.5,
+        current_close,
+        f" ▶{_price_fmt}",
+        color="#FFD700",
+        fontsize=7,
+        va="center",
+        ha="left",
+        fontweight="bold",
+        bbox=dict(facecolor="#1a1a1a", edgecolor="#FFD700", alpha=0.8, boxstyle="round,pad=0.2"),
+        zorder=12,
+    )
+
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     x_indices = np.arange(len(ohlc))  # 互換性のため保持
 
     ob_zones: list[dict] = smc.get("ob_zones", [])
     fvg_zones: list[dict] = smc.get("fvg_zones", [])
 
-    box_width = len(ohlc) - 1
+    # OBゾーンは右3/4のみ描画（左1/4はゾーン塗りつぶしで視認性が落ちるため）
+    _ob_start_x = len(ohlc) // 4
+    box_width = len(ohlc) - 1 - _ob_start_x
 
     for zone in ob_zones:
         try:
@@ -375,7 +406,7 @@ def generate_smc_chart_base64(
             face_alpha = 0.05 if mitigated else 0.18
             edge_alpha = 0.25 if mitigated else 0.75
             rect = mpatches.Rectangle(
-                xy=(0, lo),
+                xy=(_ob_start_x, lo),
                 width=box_width,
                 height=hi - lo,
                 linewidth=0.8,
@@ -387,7 +418,7 @@ def generate_smc_chart_base64(
             # AIが種別を認識できるようにゾーン右端にラベルを添付
             label_text = ("Bull OB" if zone_type == "bull" else "Bear OB") + (" [M]" if mitigated else "")
             ax_main.text(
-                box_width * 0.98,
+                (_ob_start_x + box_width) * 0.98,
                 (hi + lo) / 2,
                 label_text,
                 color=(*color, 0.9),
@@ -411,7 +442,7 @@ def generate_smc_chart_base64(
             face_alpha = 0.05 if fvg_mitigated else 0.11
             edge_alpha = 0.30 if fvg_mitigated else 0.55
             rect = mpatches.Rectangle(
-                xy=(0, lo),
+                xy=(_ob_start_x, lo),
                 width=box_width,
                 height=hi - lo,
                 linewidth=0.6,
@@ -423,7 +454,7 @@ def generate_smc_chart_base64(
             # AIが種別を認識できるようにゾーン右端にラベルを添付
             fvg_label = "FVG [M]" if fvg_mitigated else "FVG"
             ax_main.text(
-                box_width * 0.98,
+                (_ob_start_x + box_width) * 0.98,
                 (hi + lo) / 2,
                 fvg_label,
                 color=(*_SMC_FVG_COLOR, 0.9),
@@ -494,14 +525,18 @@ def generate_smc_chart_pair_base64(
     symbol: str,
     smc_features: dict | None = None,
     invalidation_price: float | None = None,
+    swept_level: float | None = None,
+    swept_type: str | None = None,
 ) -> tuple[str | None, str | None]:
     """H1 と M15 のSMCオーバーレイ付きチャートをbase64で返す。
 
     エントリー時: invalidation_price=None で両足生成
     エグジット監視時: invalidation_price を指定してM15のみ生成してもよい
     """
-    h1_b64 = generate_smc_chart_base64(symbol, config.TREND_TF, smc_features, None)
-    m15_b64 = generate_smc_chart_base64(symbol, config.EXECUTION_TF, smc_features, invalidation_price)
+    h1_b64 = generate_smc_chart_base64(symbol, config.TREND_TF, smc_features, None,
+                                        swept_level=swept_level, swept_type=swept_type)
+    m15_b64 = generate_smc_chart_base64(symbol, config.EXECUTION_TF, smc_features, invalidation_price,
+                                         swept_level=swept_level, swept_type=swept_type)
     return h1_b64, m15_b64
 
 
