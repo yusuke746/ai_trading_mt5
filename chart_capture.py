@@ -151,6 +151,13 @@ def generate_smc_chart_base64(
     smc = smc_features or {}
     current_close = float(ohlc["Close"].iloc[-1])
 
+    # Y軸描画範囲: OHLCローソク足実体 ± 30% (遠距離hlineによるY軸圧縮を防ぐ)
+    _ohlc_hi = float(ohlc["High"].max())
+    _ohlc_lo = float(ohlc["Low"].min())
+    _price_span = max(_ohlc_hi - _ohlc_lo, 1e-10)
+    _draw_hi = _ohlc_hi + _price_span * 0.30
+    _draw_lo = _ohlc_lo - _price_span * 0.30
+
     def _pick_near_levels(levels: list, max_count: int) -> list[float]:
         """現在価格に近いレベルを優先して上位N本だけ返す。"""
         cleaned: list[float] = []
@@ -285,6 +292,22 @@ def generate_smc_chart_base64(
         hlines_widths.append(2.5)
         line_labels.append((float(invalidation_price), "INV", "crimson"))
 
+    # ── 描画範囲外の hline を除去: 遠距離水平線によるY軸圧縮を防ぐ ──
+    if hlines_prices:
+        _kept = [
+            (p, c, s, w)
+            for p, c, s, w in zip(hlines_prices, hlines_colors, hlines_styles, hlines_widths)
+            if _draw_lo <= p <= _draw_hi
+        ]
+        if _kept:
+            hlines_prices[:], hlines_colors[:], hlines_styles[:], hlines_widths[:] = (
+                list(col) for col in zip(*_kept)
+            )
+        else:
+            hlines_prices.clear(); hlines_colors.clear()
+            hlines_styles.clear(); hlines_widths.clear()
+    line_labels = [(p, lbl, c) for p, lbl, c in line_labels if _draw_lo <= p <= _draw_hi]
+
     hlines_cfg = (
         {
             "hlines": hlines_prices,
@@ -328,6 +351,8 @@ def generate_smc_chart_base64(
     # ラベル右余白: PDH/PDL等テキストが y軸と重ならないよう確保
     _label_margin = 5  # バー5本分
     ax_main.set_xlim(right=len(ohlc) - 1 + _label_margin)
+    # Y軸を明示固定 (遠距離hline描画後でもローソク足が画面に収まるよう)
+    ax_main.set_ylim(_draw_lo, _draw_hi)
 
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     x_indices = np.arange(len(ohlc))  # 互換性のため保持
@@ -341,6 +366,8 @@ def generate_smc_chart_base64(
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
+            if not (_draw_lo <= lo <= _draw_hi or _draw_lo <= hi <= _draw_hi):
+                continue  # 描画範囲外のゾーンはスキップ
             zone_type = str(zone.get("type", "bull")).lower()
             color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
             # Mitigation: 終値が完全に貫通したゾーンは透明度を落として「使用済み」表示
@@ -357,6 +384,19 @@ def generate_smc_chart_base64(
                 zorder=2,
             )
             ax_main.add_patch(rect)
+            # AIが種別を認識できるようにゾーン右端にラベルを添付
+            label_text = ("Bull OB" if zone_type == "bull" else "Bear OB") + (" [M]" if mitigated else "")
+            ax_main.text(
+                box_width * 0.98,
+                (hi + lo) / 2,
+                label_text,
+                color=(*color, 0.9),
+                fontsize=6,
+                va="center",
+                ha="right",
+                fontweight="bold",
+                zorder=11,
+            )
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("OBゾーン描画スキップ: %s", e)
 
@@ -364,6 +404,8 @@ def generate_smc_chart_base64(
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
+            if not (_draw_lo <= lo <= _draw_hi or _draw_lo <= hi <= _draw_hi):
+                continue  # 描画範囲外のゾーンはスキップ
             # FVG Mitigation: 価格がゾーン内に入っている = 充填中
             fvg_mitigated = lo <= current_close <= hi
             face_alpha = 0.05 if fvg_mitigated else 0.11
@@ -378,6 +420,19 @@ def generate_smc_chart_base64(
                 zorder=2,
             )
             ax_main.add_patch(rect)
+            # AIが種別を認識できるようにゾーン右端にラベルを添付
+            fvg_label = "FVG [M]" if fvg_mitigated else "FVG"
+            ax_main.text(
+                box_width * 0.98,
+                (hi + lo) / 2,
+                fvg_label,
+                color=(*_SMC_FVG_COLOR, 0.9),
+                fontsize=6,
+                va="center",
+                ha="right",
+                fontweight="bold",
+                zorder=11,
+            )
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
 
@@ -418,11 +473,12 @@ def generate_smc_chart_base64(
     ax_main.legend(
         handles=legend_handles,
         loc="upper left",
-        fontsize=7,
+        fontsize=6,
+        ncol=2,
         framealpha=0.55,
         facecolor="white",
         edgecolor="none",
-        borderpad=0.6,
+        borderpad=0.5,
     )
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")

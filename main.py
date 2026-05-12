@@ -472,13 +472,14 @@ def _check_entry(symbol: str):
     if streak >= config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER and last_closed_at:
         try:
             last_dt = _as_utc(datetime.fromisoformat(last_closed_at))
-            elapsed_min = (datetime.now(UTC) - last_dt).total_seconds() / 60
+            elapsed_min = max(0.0, (datetime.now(UTC) - last_dt).total_seconds() / 60)
             if elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
+                remaining_min = config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES - elapsed_min
                 logger.warning(
-                    "[Entry] %s: 直近%d連敗のためクールダウン中 (%.0f/%.0f min) → スキップ",
+                    "[Entry] %s: 直近%d連敗のためクールダウン中 (残り%.0f/%.0f min) → スキップ",
                     symbol,
                     streak,
-                    elapsed_min,
+                    remaining_min,
                     config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES,
                 )
                 return
@@ -494,13 +495,14 @@ def _check_entry(symbol: str):
         if closed_at:
             try:
                 last_closed_dt = _as_utc(datetime.fromisoformat(closed_at))
-                elapsed_min = (datetime.now(UTC) - last_closed_dt).total_seconds() / 60
+                elapsed_min = max(0.0, (datetime.now(UTC) - last_closed_dt).total_seconds() / 60)
                 block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS
                 if elapsed_min < block_minutes:
+                    remaining_min = block_minutes - elapsed_min
                     logger.warning(
-                        "[Entry] %s: 同銘柄クールダウン中(全Exit) %.0f/%.0f min (%d bars, reason=%s) → スキップ",
+                        "[Entry] %s: 同銘柄クールダウン中(全Exit) 残り%.0f/%.0f min (%d bars, reason=%s) → スキップ",
                         symbol,
-                        elapsed_min,
+                        remaining_min,
                         block_minutes,
                         config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS,
                         recent_closed.get("exit_reason", "UNKNOWN"),
@@ -516,13 +518,14 @@ def _check_entry(symbol: str):
         if win_closed_at:
             try:
                 last_win_dt = _as_utc(datetime.fromisoformat(win_closed_at))
-                elapsed_min = (datetime.now(UTC) - last_win_dt).total_seconds() / 60
+                elapsed_min = max(0.0, (datetime.now(UTC) - last_win_dt).total_seconds() / 60)
                 block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS
                 if elapsed_min < block_minutes:
+                    remaining_min = block_minutes - elapsed_min
                     logger.warning(
-                        "[Entry] %s: 勝ち後クールダウン中 %.0f/%.0f min (%d bars, profit=%.0f) → スキップ",
+                        "[Entry] %s: 勝ち後クールダウン中 残り%.0f/%.0f min (%d bars, profit=%.0f) → スキップ",
                         symbol,
-                        elapsed_min,
+                        remaining_min,
                         block_minutes,
                         config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS,
                         float(recent_win.get("result_profit") or 0),
@@ -624,14 +627,15 @@ def _check_entry(symbol: str):
         if closed_at:
             try:
                 last_break_dt = _as_utc(datetime.fromisoformat(closed_at))
-                elapsed_min = (datetime.now(UTC) - last_break_dt).total_seconds() / 60
+                elapsed_min = max(0.0, (datetime.now(UTC) - last_break_dt).total_seconds() / 60)
                 block_minutes = _timeframe_to_minutes(config.EXECUTION_TF) * config.PREMISE_BREAK_REENTRY_BLOCK_BARS
                 if elapsed_min < block_minutes:
+                    remaining_min = block_minutes - elapsed_min
                     logger.warning(
-                        "[Entry] %s: PREMISE_BREAK後の同方向再エントリー禁止中 (%s %.0f/%.0f min, %d bars) → スキップ",
+                        "[Entry] %s: PREMISE_BREAK後の同方向再エントリー禁止中 (%s 残り%.0f/%.0f min, %d bars) → スキップ",
                         symbol,
                         inferred_direction,
-                        elapsed_min,
+                        remaining_min,
                         block_minutes,
                         config.PREMISE_BREAK_REENTRY_BLOCK_BARS,
                     )
@@ -1093,16 +1097,30 @@ def _check_single_exit(pos: dict):
         except (TypeError, ValueError):
             pass
 
+    # エグジット監視用SMC特徴量を取得（BOS/CHoCH/OB/FVG/PDH/PDLをチャートに重ねる）
+    # ノイズ除去のためEQH/EQL/スウィング点線は渡さない
+    try:
+        sym_info = mt5_connector.get_symbol_info(symbol)
+        digits = sym_info.get("digits", 5) if sym_info else 5
+        exit_smc = mt5_connector.get_price_levels(symbol, digits=digits)
+        # エグジット判断で不要なノイズを除去
+        exit_smc.pop("eq_highs", None)
+        exit_smc.pop("eq_lows", None)
+        exit_smc.pop("swing_highs", None)
+        exit_smc.pop("swing_lows", None)
+        exit_smc.pop("buy_liquidity", None)
+        exit_smc.pop("sell_liquidity", None)
+    except Exception:
+        exit_smc = None
+
     # SMCオーバーレイ付きチャートを生成（invalidation_price があれば赤線入り）
-    if invalidation_price is not None:
-        exit_img_b64 = chart_capture.generate_smc_chart_base64(
-            symbol, config.EXIT_MONITOR_TF, invalidation_price=invalidation_price
-        )
-        # base64文字列をbytesに戻す（analyze_exitのインターフェース互換のため）
-        import base64 as _b64
-        exit_img = _b64.b64decode(exit_img_b64) if exit_img_b64 else None
-    else:
-        exit_img = chart_capture.generate_chart(symbol, config.EXIT_MONITOR_TF)
+    exit_img_b64 = chart_capture.generate_smc_chart_base64(
+        symbol, config.EXIT_MONITOR_TF,
+        smc_features=exit_smc,
+        invalidation_price=invalidation_price,
+    )
+    import base64 as _b64
+    exit_img = _b64.b64decode(exit_img_b64) if exit_img_b64 else None
     if exit_img is None:
         return
 
