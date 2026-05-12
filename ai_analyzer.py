@@ -151,6 +151,12 @@ def analyze_entry(symbol: str, current_price: float,
   ② Liquidityラインを ATR({atr_h1:.5f})×{config.SMC_SWEEP_ATR_MULT}以上 侵食後に反転したSweepが確認できる
   ③ Sweep後にBOS/長ヒゲ/Engulfingの反転アクションがある
   → smc_liquidity_sweep=true が必須
+
+⚠️ OBゾーン位置チェック (必須):
+  - チャートの「Bull OB」「Bear OB」ゾーンと現在価格の位置関係を必ず確認すること
+  - SELL判断の場合: 現在価格がBull OBゾーン内またはBull OB上端以上にある → confidence -25。Bull OBがサポートとして機能している間のSELLは高リスク。Bull OBの下限を明確に割っていない限りSKIPを強く推奨
+  - BUY判断の場合: 現在価格がBear OBゾーン内またはBear OB下端以下にある → confidence -25。Bear OBがレジスタンスとして機能している間のBUYは高リスク。Bear OBの上限を明確に超えていない限りSKIPを強く推奨
+  - Sweep後に既に ATR×1.5以上移動している場合: エントリー遅延の可能性 → confidence -15
 """
     else:
         setup_condition = ""

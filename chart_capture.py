@@ -467,18 +467,28 @@ def generate_smc_chart_base64(
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
 
-    # ── 主要ライン右端ラベル (PDH/PDL/PWH/PWL/INV) ──
+    # ── 主要ライン右端ラベル (PDH/PDL/PWH/PWL/INV/SWEEP) ──
+    # 密集回避: 近接ラベルをY方向にずらす
     x_right = len(ohlc) - 1
-    for price, label, color in line_labels:
+    _min_label_gap = _price_span * 0.025  # 表示範囲の2.5%以内は「密集」とみなす
+    _used_y: list[float] = []  # 使用済みY位置トラッキング
+    for price, label, color in sorted(line_labels, key=lambda x: x[0]):
+        # 密集チェック: 既存ラベルとの最小距離を確保
+        disp_y = price
+        attempts = 0
+        while any(abs(disp_y - used) < _min_label_gap for used in _used_y) and attempts < 6:
+            disp_y += _min_label_gap * (1 if attempts % 2 == 0 else -1) * ((attempts // 2) + 1)
+            attempts += 1
+        _used_y.append(disp_y)
         ax_main.text(
             x_right + 0.6,
-            price,
+            disp_y,
             label,
             color=color,
             fontsize=7,
             va="center",
             ha="left",
-            bbox=dict(facecolor="white", edgecolor=color, alpha=0.55, boxstyle="round,pad=0.15"),
+            bbox=dict(facecolor="white", edgecolor=color, alpha=0.6, boxstyle="round,pad=0.15"),
             zorder=10,
         )
 
