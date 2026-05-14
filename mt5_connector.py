@@ -564,16 +564,19 @@ def _send_order_with_filling_fallback(request: dict, symbol: str, context: str):
         mt5.ORDER_FILLING_FOK,
         mt5.ORDER_FILLING_RETURN,
     ]
+    _MODE_NAMES = {mt5.ORDER_FILLING_IOC: "IOC", mt5.ORDER_FILLING_FOK: "FOK", mt5.ORDER_FILLING_RETURN: "RETURN"}
     last_result = None
     for mode in _FILLING_MODES:
         attempt = dict(request)
         attempt["type_filling"] = mode
         result = mt5.order_send(attempt)
         if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+            mode_name = _MODE_NAMES.get(mode, str(mode))
             if mode != mt5.ORDER_FILLING_IOC:
-                mode_name = {mt5.ORDER_FILLING_FOK: "FOK", mt5.ORDER_FILLING_RETURN: "RETURN"}.get(mode, str(mode))
                 logger.info("%s: %sで注文成功: %s", context, mode_name, symbol)
             return result
+        retcode = result.retcode if result is not None else "None"
+        logger.debug("%s: %s filling=%s -> retcode=%s", context, symbol, _MODE_NAMES.get(mode, str(mode)), retcode)
         last_result = result if result is not None else last_result
     return last_result
 
@@ -585,6 +588,18 @@ def place_order(symbol: str, direction: str, lot: float,
     sym_info = mt5.symbol_info(symbol)
     if sym_info is None:
         logger.error("シンボル情報なし: %s", symbol)
+        return None
+
+    # trade_mode: 0=disabled 1=long_only 2=short_only 3=close_only 4=full
+    _TRADE_MODE_NAMES = {0: "DISABLED", 1: "LONG_ONLY", 2: "SHORT_ONLY", 3: "CLOSE_ONLY", 4: "FULL"}
+    trade_mode = getattr(sym_info, "trade_mode", 4)
+    if trade_mode != 4:
+        mode_name = _TRADE_MODE_NAMES.get(trade_mode, str(trade_mode))
+        logger.warning("注文スキップ: %s trade_mode=%s(%s) — 市場が新規注文を受け付けていません", symbol, trade_mode, mode_name)
+        discord_notifier.send_error(
+            f"注文スキップ: {symbol}",
+            f"trade_mode={trade_mode}({mode_name}) — 市場クローズ中または新規注文不可",
+        )
         return None
 
     price = sym_info.ask if direction == "BUY" else sym_info.bid

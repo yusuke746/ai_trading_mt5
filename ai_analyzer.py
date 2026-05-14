@@ -342,7 +342,7 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     # nano には補助判定(反転シグナル有無)のみを依頼する。
     inv_text = f"{invalidation_price:.5f}" if invalidation_price is not None else "N/A"
 
-    _LONG_HOLD_THRESHOLD_MIN = 120
+    _LONG_HOLD_THRESHOLD_MIN = 250
 
     if safe_hold_minutes >= _LONG_HOLD_THRESHOLD_MIN:
         task_section = f"""【task】
