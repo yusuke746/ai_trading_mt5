@@ -295,7 +295,7 @@ ADAPTIVE_LOOKBACK_DAYS       = int(os.getenv("ADAPTIVE_LOOKBACK_DAYS", "7"))
 ADAPTIVE_MIN_SAMPLES         = int(os.getenv("ADAPTIVE_MIN_SAMPLES", "10"))
 ADAPTIVE_CONF_STEP           = int(os.getenv("ADAPTIVE_CONF_STEP", "3"))
 ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "70"))
-ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "85"))
+ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "78"))
 ADAPTIVE_CONF_MAX_WEEKLY_DELTA = int(os.getenv("ADAPTIVE_CONF_MAX_WEEKLY_DELTA", "6"))
 ADAPTIVE_LLM_ENABLED         = os.getenv("ADAPTIVE_LLM_ENABLED", "true").lower() == "true"
 ADAPTIVE_LLM_MODEL           = os.getenv("ADAPTIVE_LLM_MODEL", "gpt-5.4")

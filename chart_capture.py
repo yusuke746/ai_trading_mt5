@@ -405,16 +405,50 @@ def generate_smc_chart_base64(
     ob_zones: list[dict] = smc.get("ob_zones", [])
     fvg_zones: list[dict] = smc.get("fvg_zones", [])
     h1_ob_zones: list[dict] = smc.get("h1_ob_zones", [])
+
+    # ── OBゾーン絞り込み: Mitigated除外・価格に近いBull/Bear各最大2件 ──
+    _MAX_OB_PER_SIDE = 2
+    _MAX_FVG = 3
+    _bull_obs_tmp: list[tuple] = []
+    _bear_obs_tmp: list[tuple] = []
+    for _z in ob_zones:
+        try:
+            _hi = float(_z["high"]); _lo = float(_z["low"])
+            _zt = str(_z.get("type", "bull")).lower()
+            _mit = (current_close < _lo) if _zt == "bull" else (current_close > _hi)
+            if _mit or not (_draw_lo <= _lo <= _draw_hi or _draw_lo <= _hi <= _draw_hi):
+                continue
+            _mid = (_hi + _lo) / 2
+            (_bull_obs_tmp if _zt == "bull" else _bear_obs_tmp).append((abs(_mid - current_close), _z))
+        except (KeyError, TypeError, ValueError):
+            pass
+    _bull_obs_tmp.sort(key=lambda x: x[0])
+    _bear_obs_tmp.sort(key=lambda x: x[0])
+    ob_zones_draw = [z for _, z in _bull_obs_tmp[:_MAX_OB_PER_SIDE]] + [z for _, z in _bear_obs_tmp[:_MAX_OB_PER_SIDE]]
+
+    # ── FVGゾーン絞り込み: Mitigated(価格がゾーン内)除外・近接上位3件 ──
+    _fvg_tmp: list[tuple] = []
+    for _z in fvg_zones:
+        try:
+            _hi = float(_z["high"]); _lo = float(_z["low"])
+            if not (_draw_lo <= _lo <= _draw_hi or _draw_lo <= _hi <= _draw_hi):
+                continue
+            if _lo <= current_close <= _hi:  # Mitigated FVGはスキップ
+                continue
+            _fvg_tmp.append((abs((_hi + _lo) / 2 - current_close), _z))
+        except (TypeError, ValueError):
+            pass
+    _fvg_tmp.sort(key=lambda x: x[0])
+    fvg_zones_draw = [z for _, z in _fvg_tmp[:_MAX_FVG]]
+
     # OBゾーンは右3/4のみ描画（左1/4はゾーン塗りつぶしで視認性が落ちるため）
     _ob_start_x = len(ohlc) // 4
     box_width = len(ohlc) - 1 - _ob_start_x
 
-    for zone in ob_zones:
+    for zone in ob_zones_draw:
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
-            if not (_draw_lo <= lo <= _draw_hi or _draw_lo <= hi <= _draw_hi):
-                continue  # 描画範囲外のゾーンはスキップ
             zone_type = str(zone.get("type", "bull")).lower()
 
             # H1 OBとのコンフルエンス判定: 同種・価格帯重複
@@ -430,11 +464,9 @@ def generate_smc_chart_base64(
             else:
                 color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
 
-            # Mitigation: 終値が完全に貫通したゾーンは透明度を落として「使用済み」表示
-            mitigated = (current_close < lo) if zone_type == "bull" else (current_close > hi)
-            face_alpha = 0.05 if mitigated else (0.28 if is_confluence else 0.18)
-            edge_alpha = 0.25 if mitigated else (1.0  if is_confluence else 0.75)
-            linewidth  = 0.8 if not is_confluence else 1.8
+            face_alpha = 0.28 if is_confluence else 0.18
+            edge_alpha = 1.0  if is_confluence else 0.75
+            linewidth  = 1.8  if is_confluence else 0.8
             rect = mpatches.Rectangle(
                 xy=(_ob_start_x, lo),
                 width=box_width,
@@ -445,11 +477,7 @@ def generate_smc_chart_base64(
                 zorder=2,
             )
             ax_main.add_patch(rect)
-            # AIが種別を認識できるようにゾーン右端にラベルを添付
-            if is_confluence:
-                label_text = ("★ H.Prob Bull OB" if zone_type == "bull" else "★ H.Prob Bear OB") + (" [M]" if mitigated else "")
-            else:
-                label_text = ("Bull OB" if zone_type == "bull" else "Bear OB") + (" [M]" if mitigated else "")
+            label_text = ("★ H.Prob Bull OB" if zone_type == "bull" else "★ H.Prob Bear OB") if is_confluence else ("Bull OB" if zone_type == "bull" else "Bear OB")
             ax_main.text(
                 (_ob_start_x + box_width) * 0.98,
                 (hi + lo) / 2,
@@ -464,32 +492,24 @@ def generate_smc_chart_base64(
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("OBゾーン描画スキップ: %s", e)
 
-    for zone in fvg_zones:
+    for zone in fvg_zones_draw:
         try:
             hi = float(zone["high"])
             lo = float(zone["low"])
-            if not (_draw_lo <= lo <= _draw_hi or _draw_lo <= hi <= _draw_hi):
-                continue  # 描画範囲外のゾーンはスキップ
-            # FVG Mitigation: 価格がゾーン内に入っている = 充填中
-            fvg_mitigated = lo <= current_close <= hi
-            face_alpha = 0.05 if fvg_mitigated else 0.11
-            edge_alpha = 0.30 if fvg_mitigated else 0.55
             rect = mpatches.Rectangle(
                 xy=(_ob_start_x, lo),
                 width=box_width,
                 height=hi - lo,
                 linewidth=0.6,
-                edgecolor=(*_SMC_FVG_COLOR, edge_alpha),
-                facecolor=(*_SMC_FVG_COLOR, face_alpha),
+                edgecolor=(*_SMC_FVG_COLOR, 0.55),
+                facecolor=(*_SMC_FVG_COLOR, 0.11),
                 zorder=2,
             )
             ax_main.add_patch(rect)
-            # AIが種別を認識できるようにゾーン右端にラベルを添付
-            fvg_label = "FVG [M]" if fvg_mitigated else "FVG"
             ax_main.text(
                 (_ob_start_x + box_width) * 0.98,
                 (hi + lo) / 2,
-                fvg_label,
+                "FVG",
                 color=(*_SMC_FVG_COLOR, 0.9),
                 fontsize=6,
                 va="center",

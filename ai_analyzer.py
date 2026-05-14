@@ -115,12 +115,19 @@ def analyze_entry(symbol: str, current_price: float,
             f"\n- 構造的SL幅(Python計算・下限): {_structural_sl_dist:.5f} ← sl_distanceはこれ以上であること"
             if _structural_sl_dist is not None else ""
         )
+        _rr_note = ""
+        if not mech_gate.get("rr_pass") and _mech_entry_type == "REVERSAL_SWEEP":
+            _rr_note = (
+                "\n  ⚠️ 機械的RRは不足しているが、チャート上のOB/FVG/構造レベルを"
+                "精査し十分なTPターゲットがあればエントリー可。"
+                "tp_distanceには構造的TP候補(OB端/FVG中心/PDH/PDL等)までの距離を返すこと。"
+            )
         mech_section = f"""
 【機械判定ゲート (Python計算済み・確定事実)】
 - エントリータイプ: {_mech_entry_type} ({_entry_type_label})
 - Sweep検出: {mech_gate.get('sweep_pass', 'N/A')} (方向: {mech_gate.get('sweep_type', 'N/A')}){_swept_line}{_sl_floor_line}
 - BOS/MAトレンド確認: {mech_gate.get('bos_pass', 'N/A')}
-- RR充足 (最低{config.ENTRY_MIN_TP_R:.1f}R以上): {mech_gate.get('rr_pass', 'N/A')}
+- RR充足 (最低{config.ENTRY_MIN_TP_R:.1f}R以上): {mech_gate.get('rr_pass', 'N/A')}{_rr_note}
 """
     else:
         mech_section = ""
@@ -170,6 +177,46 @@ def analyze_entry(symbol: str, current_price: float,
 - invalidation_price は、エントリー価格から最低でも M15 ATR({atr_m15:.5f}) × 1.0 以上離れた構造破綻レベルを返すこと。
 """
 
+    # ── エントリータイプ別: alignment / SKIP条件セクション ──────────────────────
+    if _mech_entry_type == "REVERSAL_SWEEP":
+        _alignment_section = """\
+【alignmentフィールドのルール】
+alignment は「H1トレンド方向とエントリー方向が一致しているか」を示す参考フラグです。
+  - h1_trend="UP"   かつ decision="BUY"  → alignment=true
+  - h1_trend="DOWN" かつ decision="SELL" → alignment=true
+  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中だが逆張りSELL)
+  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中だが逆張りBUY)
+⚠️ 逆張りSweep (REVERSAL_SWEEP) では alignment=false が自然です。H1逆行の反転セットアップのため、
+  alignment=false はSKIPにはなりません。現状を正確に返してください。"""
+        _skip_section = f"""\
+【SKIP条件 (1つでも該当したらSKIP)】
+- confidence < 75 (逆張りSweepは構造リスクがあるため基準引き上げ)
+- smc_liquidity_sweep=false (Sweep確認が必須)
+- Sweep方向と決定方向の矛盾 (HIGH sweep→SELL / LOW sweep→BUY のみ有効)
+- 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
+- 外部ニュース監視で重大リスクが検知されている場合
+※ h1_trend=SIDEWAYS および alignment=false はREVERSAL_SWEEPではSKIP条件ではありません"""
+    else:
+        _alignment_section = """\
+【alignmentフィールドのルール (重要)】
+alignment は「H1トレンド方向とエントリー方向が一致しているか」を示すフラグです。
+  - h1_trend="UP"   かつ decision="BUY"  → alignment=true  (上昇トレンドに乗る順張り)
+  - h1_trend="DOWN" かつ decision="SELL" → alignment=true  (下降トレンドに乗る順張り)
+  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中の逆張りSELL = トレンド不一致)
+  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中の逆張りBUY  = トレンド不一致)
+⚠️ h1_trend="UP"+decision="SELL" で alignment=true と回答するのは論理的に誤りです。必ずfalseとしてください。"""
+        _skip_section = """\
+【SKIP条件 (1つでも該当したらSKIP)】
+- confidence < 70
+- h1_trend = SIDEWAYS
+- H1とM15のトレンドが不一致 (alignment=false)
+- h1_trend="UP" かつ decision="SELL" (上昇トレンド中の逆張りSELL → alignment=falseとなり上記に該当)
+- h1_trend="DOWN" かつ decision="BUY" (下降トレンド中の逆張りBUY → alignment=falseとなり上記に該当)
+- 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
+- 逆張り: smc_liquidity_sweep=false
+- 順張り: smc_ob_confirmed=false
+- 外部ニュース監視で重大リスクが検知されている場合"""
+
     prompt = f"""あなたはSMCアナリストです。
 H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済み）を見て
 {symbol}のエントリー判断をしてください。
@@ -180,24 +227,9 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
 - 口座残高: ¥{balance:,.0f}
 {gold_safety_note}
 {setup_condition}
-【alignmentフィールドのルール (重要)】
-alignment は「H1トレンド方向とエントリー方向が一致しているか」を示すフラグです。
-  - h1_trend="UP"   かつ decision="BUY"  → alignment=true  (上昇トレンドに乗る順張り)
-  - h1_trend="DOWN" かつ decision="SELL" → alignment=true  (下降トレンドに乗る順張り)
-  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中の逆張りSELL = トレンド不一致)
-  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中の逆張りBUY  = トレンド不一致)
-⚠️ h1_trend="UP"+decision="SELL" で alignment=true と回答するのは論理的に誤りです。必ずfalseとしてください。
+{_alignment_section}
 
-【SKIP条件 (1つでも該当したらSKIP)】
-- confidence < 70
-- h1_trend = SIDEWAYS
-- H1とM15のトレンドが不一致 (alignment=false)
-- h1_trend="UP" かつ decision="SELL" (上昇トレンド中の逆張りSELL → alignment=falseとなり上記に該当)
-- h1_trend="DOWN" かつ decision="BUY" (下降トレンド中の逆張りBUY → alignment=falseとなり上記に該当)
-- 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
-- 逆張り: smc_liquidity_sweep=false
-- 順張り: smc_ob_confirmed=false
-- 外部ニュース監視で重大リスクが検知されている場合
+{_skip_section}
 
 【回答フォーマット (JSONのみ・コメント不要)】
 {{
@@ -447,8 +479,7 @@ def _should_run_final_approval(symbol: str, signal: EntrySignal) -> bool:
         return False
     if signal.decision not in {"BUY", "SELL"}:
         return False
-    if not signal.alignment:
-        return False
+    # guards通過済みのシグナルはalignmentによるブロック不要 (REVERSAL_SWEEPはalignment=falseが自然)
     return symbol in config.FINAL_APPROVAL_SYMBOLS or signal.confidence >= config.FINAL_APPROVAL_MIN_CONFIDENCE
 
 
@@ -459,18 +490,27 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
 
     skip_reasons: list[str] = []
     entry_type = mech_gate.get("entry_type") if mech_gate else None
+    is_reversal = (entry_type == "REVERSAL_SWEEP")
 
-    if signal.confidence < 70:
-        skip_reasons.append("confidence_below_70")
-    if signal.h1_trend == "SIDEWAYS":
+    # 信頼度: 逆張りSweepはalignment保証がないため基準を少し上げる
+    min_conf = 75 if is_reversal else 70
+    if signal.confidence < min_conf:
+        skip_reasons.append(f"confidence_below_{min_conf}")
+
+    # SIDEWAYS: 逆張りSweepはレンジ両端の反転狙いのため許容
+    if signal.h1_trend == "SIDEWAYS" and not is_reversal:
         skip_reasons.append("h1_sideways")
-    if not signal.alignment:
+
+    # alignment: 逆張りSweepは本質的にH1逆行が多いため要求しない
+    if not signal.alignment and not is_reversal:
         skip_reasons.append("trend_misalignment")
-    # H1トレンド × エントリー方向の矛盾チェック (AIがalignment=trueと誤報告した場合も捕捉)
-    if signal.h1_trend == "UP" and signal.decision == "SELL":
-        skip_reasons.append("h1_up_but_sell")
-    if signal.h1_trend == "DOWN" and signal.decision == "BUY":
-        skip_reasons.append("h1_down_but_buy")
+
+    # H1トレンド × 方向矛盾チェック (REVERSAL_SWEEPでは適用しない)
+    if not is_reversal:
+        if signal.h1_trend == "UP" and signal.decision == "SELL":
+            skip_reasons.append("h1_up_but_sell")
+        if signal.h1_trend == "DOWN" and signal.decision == "BUY":
+            skip_reasons.append("h1_down_but_buy")
     # mechanical_rr / mechanical_bos は main.py で AI呼び出し前にチェック済み
     # ここでは重複チェックしない
 
@@ -520,10 +560,11 @@ def _run_entry_final_approval(symbol: str, current_price: float,
 - sl_distance: {primary_signal.sl_distance} / tp_distance: {primary_signal.tp_distance}
 - 現在価格: {current_price} / M15 ATR: {atr_m15:.5f} / H1 ATR: {atr_h1:.5f}
 
-【alignmentルール (必須)】
+【alignmentルール】
   h1_trend="UP"+decision="SELL" → alignment=false (上昇トレンド中のSELL = 不一致)
   h1_trend="DOWN"+decision="BUY" → alignment=false (下降トレンド中のBUY = 不一致)
-  alignment=false の場合は必ず SKIP としてください。
+  逆張りSweep (REVERSAL_SWEEP) では alignment=false でも承認可能。
+  一次判定のalignment値を継承し、現状を正確に反映してください。
 
 【承認チェック (すべてYESでのみ承認)】
   ① チャート上でLiquidity Sweepが本物か (ヒゲタッチだけでなく明確な侵食か)

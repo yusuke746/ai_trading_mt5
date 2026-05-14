@@ -250,6 +250,17 @@ def _mechanical_smc_gate(
         levels.append(float(v))
     for v in smc_data.get("swing_lows", []):
         levels.append(float(v))
+    # Equal Highs/Lowsをルービックレベル（TPターゲット）に追加
+    for v in smc_data.get("eq_highs", []):
+        try:
+            levels.append(float(v))
+        except (TypeError, ValueError):
+            pass
+    for v in smc_data.get("eq_lows", []):
+        try:
+            levels.append(float(v))
+        except (TypeError, ValueError):
+            pass
 
     if not levels:
         return False, False, False, "NONE", "NONE", None, None
@@ -660,13 +671,19 @@ def _check_entry(symbol: str):
             )
             return
         # RR不足は AI呼び出し前にスキップ (コスト節約)
+        # 例外: REVERSAL_SWEEPでbos_pass=TrueなときはAIがTPを精査できるため委任
         if not smc_rr_pass:
+            if mech_entry_type != "REVERSAL_SWEEP" or not smc_bos_pass:
+                logger.info(
+                    "[Entry] %s: 機械ゲート: RR不足 → AIコスト節約スキップ "
+                    "(rr_pass=False entry_type=%s)",
+                    symbol, mech_entry_type,
+                )
+                return
             logger.info(
-                "[Entry] %s: 機械ゲート: RR不足 → AIコスト節約スキップ "
-                "(rr_pass=False entry_type=%s)",
-                symbol, mech_entry_type,
+                "[Entry] %s: 機械ゲート: RR不足だがREVERSAL_SWEEP+bos_pass=True → AIにTP精査委任",
+                symbol,
             )
-            return
         # 順張りでbos_pass=Falseも事前スキップ
         if mech_entry_type == "CONTINUATION_BOS" and not smc_bos_pass:
             logger.info(
@@ -748,7 +765,7 @@ def _check_entry(symbol: str):
         )
         return
 
-    if not signal.alignment:
+    if not signal.alignment and mech_entry_type != "REVERSAL_SWEEP":
         logger.info("[Entry] %s: H1/M15トレンド不一致 → スキップ", symbol)
         return
 
