@@ -353,8 +353,11 @@ def get_confidence_threshold(regime: str | None = None, entry_type: str | None =
         key = f"{regime}/{entry_type}"
         bucket = params.get("buckets", {}).get(key)
         if bucket:
-            return int(bucket.get("confidence_threshold", global_thr))
-    return global_thr
+            thr = int(bucket.get("confidence_threshold", global_thr))
+            # config.ADAPTIVE_CONF_MAX を上限として常にキャップ
+            return min(thr, config.ADAPTIVE_CONF_MAX)
+    # config範囲内に収める
+    return min(global_thr, config.ADAPTIVE_CONF_MAX)
 
 
 def evaluate_and_adapt() -> dict:
