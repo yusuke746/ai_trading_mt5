@@ -316,12 +316,14 @@ def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zo
 
 
 def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 180, max_zones: int = 3) -> list[dict]:
-    """直後のディスプレイスメントでOBを近似検出して返す（軽量版）。"""
+    """直後のディスプレイスメントでOBを近似検出して返す（軽量版）。
+    Mitigated判定: OB形成後に価格がゾーン内に侵入した場合は除外する。
+    """
     zones: list[dict] = []
     if df is None or len(df) < 8:
         return zones
 
-    subset = df.tail(lookback)
+    subset = df.tail(lookback).reset_index(drop=True)
     disp_th = max(atr * 0.15, 1e-9)
     end = len(subset) - 2  # 次の2本を参照するため末尾を除外
 
@@ -334,9 +336,22 @@ def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 
         next_close_2 = float(subset["close"].iloc[i + 2])
 
         if c < o and (next_close_1 - hi >= disp_th or next_close_2 - hi >= disp_th):
-            zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bull"})
+            # Bull OB: 形成後に価格がゾーン内(lo～hi)に侵入したらMitigated除外
+            mitigated = any(
+                float(subset["low"].iloc[j]) <= hi
+                for j in range(i + 1, len(subset))
+            )
+            if not mitigated:
+                zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bull"})
+
         if c > o and (lo - next_close_1 >= disp_th or lo - next_close_2 >= disp_th):
-            zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bear"})
+            # Bear OB: 形成後に価格がゾーン内(lo～hi)に侵入したらMitigated除外
+            mitigated = any(
+                float(subset["high"].iloc[j]) >= lo
+                for j in range(i + 1, len(subset))
+            )
+            if not mitigated:
+                zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bear"})
 
     return zones[-max_zones:]
 

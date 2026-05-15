@@ -130,7 +130,7 @@ ENTRY_MIN_TP_R = float(os.getenv("ENTRY_MIN_TP_R", "1.0"))
 # 銘柄別の固定SL幅設定
 # None: ATR倍率を使用 | 数値: その値を固定SLとして使用（機械ゲートの structural_sl_dist を無視）
 ENTRY_FIXED_SL_BY_SYMBOL = {
-    "GOLD": float(os.getenv("ENTRY_FIXED_SL_GOLD", "0.50")),     # オンス単位で固定
+    "GOLD": None,       # ATR/構造SLモード使用（固定0.50は狭すぎるため廃止）
     "USDJPY": None,     # ATR倍率を使用
     "EURUSD": None,
     "US100Cash": None,
@@ -141,6 +141,7 @@ ENTRY_FIXED_SL_BY_SYMBOL = {
 ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")))
 # 銘柄別の最小SL幅上書き（ATR倍率使用時のみ）
 ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
+    "GOLD": 1.5,        # GOLD#: ATR×1.5を最小SL下限（ボラ大のため広め）
     "USDJPY": 1.0,
     "EURUSD": 0.8,
 }
