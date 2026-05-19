@@ -933,14 +933,26 @@ def _check_entry(symbol: str):
             "[Entry] %s: BUY SL(%.5f) >= entry(%.5f) — 異常値フォールバック",
             symbol, sl_price, entry_price,
         )
-        sl_distance = atr_m15 * 1.5
+        # H1 ATR基準の最小SLを適用（min_sl_distanceと同じロジック）
+        if symbol_key == "GOLD":
+            sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
+        elif symbol_key in ("US100CASH", "OILCASH"):
+            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
+        else:
+            sl_distance = atr_m15 * 1.5
         sl_price = round(entry_price - sl_distance, digits)
     elif direction == "SELL" and sl_price <= entry_price:
         logger.error(
             "[Entry] %s: SELL SL(%.5f) <= entry(%.5f) — 異常値フォールバック",
             symbol, sl_price, entry_price,
         )
-        sl_distance = atr_m15 * 1.5
+        # H1 ATR基準の最小SLを適用（min_sl_distanceと同じロジック）
+        if symbol_key == "GOLD":
+            sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
+        elif symbol_key in ("US100CASH", "OILCASH"):
+            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
+        else:
+            sl_distance = atr_m15 * 1.5
         sl_price = round(entry_price + sl_distance, digits)
 
     logger.info(
