@@ -27,9 +27,9 @@ OPENAI_FINAL_APPROVAL_REASONING_EFFORT = os.getenv("OPENAI_FINAL_APPROVAL_REASON
 
 # 最終承認は高ボラ銘柄 or 高confidence時だけ実行
 FINAL_APPROVAL_SYMBOLS = {
-    symbol.strip() for symbol in os.getenv("FINAL_APPROVAL_SYMBOLS", "GOLD,US100Cash").split(",") if symbol.strip()
+    symbol.strip() for symbol in os.getenv("FINAL_APPROVAL_SYMBOLS", "GOLD,USDJPY,EURUSD,US100Cash,OILCash").split(",") if symbol.strip()
 }
-FINAL_APPROVAL_MIN_CONFIDENCE = int(os.getenv("FINAL_APPROVAL_MIN_CONFIDENCE", "75"))
+FINAL_APPROVAL_MIN_CONFIDENCE = int(os.getenv("FINAL_APPROVAL_MIN_CONFIDENCE", "65"))
 
 # ──────────────────────────────────────
 # OpenRouter (Qwen-VL等マルチモデル対応)
@@ -187,7 +187,8 @@ SMC_REVERSAL_ENABLED = os.getenv("SMC_REVERSAL_ENABLED", "true").lower() == "tru
 # 順張りBOS判定: MAのスロープを見る遡り期間 (H1バー数)
 SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBACK_BARS", "5"))
 # 順張りBOS判定: MA傾きの最小値 (ATR比率) — この値未満のMA傾きはトレンドなしとみなす
-SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.3"))
+# 0.15: 以前の0.3から緩和、緩やかなトレンドでもCONTINUATION_BOSが発動するように
+SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.15"))
 # 機械ゲートRR判定の緩和係数 (1.0未満で緩和、0.5〜1.0の範囲推奨)
 try:
     SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.75"))))
@@ -301,7 +302,7 @@ ADAPTIVE_ENABLED             = os.getenv("ADAPTIVE_ENABLED", "true").lower() == 
 ADAPTIVE_LOOKBACK_DAYS       = int(os.getenv("ADAPTIVE_LOOKBACK_DAYS", "7"))
 ADAPTIVE_MIN_SAMPLES         = int(os.getenv("ADAPTIVE_MIN_SAMPLES", "10"))
 ADAPTIVE_CONF_STEP           = int(os.getenv("ADAPTIVE_CONF_STEP", "3"))
-ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "70"))
+ADAPTIVE_CONF_MIN            = int(os.getenv("ADAPTIVE_CONF_MIN", "65"))
 ADAPTIVE_CONF_MAX            = int(os.getenv("ADAPTIVE_CONF_MAX", "78"))
 ADAPTIVE_CONF_MAX_WEEKLY_DELTA = int(os.getenv("ADAPTIVE_CONF_MAX_WEEKLY_DELTA", "6"))
 ADAPTIVE_LLM_ENABLED         = os.getenv("ADAPTIVE_LLM_ENABLED", "true").lower() == "true"

@@ -693,13 +693,14 @@ def _check_entry(symbol: str):
             )
             return
 
-    # MA近傍フィルタ: 順張りの押し目/戻しのみに適用 (逆張りはSweepレベルが遠い場合もある)
-    if mech_entry_type != "REVERSAL_SWEEP":
+    # MA近傍フィルタ: CONTINUATION_BOSの押し目/戻し確認 (REVERSAL_SWEEPは適用しない)
+    # ATR×2.0まで許容: AIがTP・SLを精査できる余地を広げる
+    if mech_entry_type == "CONTINUATION_BOS":
         distance_from_ma = abs(current_close - ma20_val)
-        if distance_from_ma > atr_m15 * 1.0:
+        if distance_from_ma > atr_m15 * 2.0:
             logger.info(
-                "[Entry] %s: MA20から乖離 (dist=%.5f > ATR=%.5f) → スキップ",
-                symbol, distance_from_ma, atr_m15,
+                "[Entry] %s: MA20から乖離大 (dist=%.5f > ATR×2=%.5f) → スキップ",
+                symbol, distance_from_ma, atr_m15 * 2.0,
             )
             return
 
