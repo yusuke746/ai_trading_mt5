@@ -298,62 +298,121 @@ def _detect_fvg_zones(df: pd.DataFrame, digits: int, lookback: int = 180, max_zo
         c0_lo = float(subset["low"].iloc[i - 2])
         c2_hi = float(subset["high"].iloc[i])
         c2_lo = float(subset["low"].iloc[i])
+        bar_offset = len(subset) - 1 - i  # 末尾（最新足）からの距離（バー数）
 
         if c0_hi < c2_lo:  # Bullish FVG
             zones.append({
                 "low": round(c0_hi, digits),
                 "high": round(c2_lo, digits),
                 "type": "bull",
+                "bar_offset": bar_offset,
             })
         if c0_lo > c2_hi:  # Bearish FVG
             zones.append({
                 "low": round(c2_hi, digits),
                 "high": round(c0_lo, digits),
                 "type": "bear",
+                "bar_offset": bar_offset,
             })
 
-    return zones[-max_zones:]
+    # bull/bear 別に最新 max_zones 件ずつ返す（片側トレンドでも両側が表示されるよう）
+    bull_fvg = [z for z in zones if z["type"] == "bull"]
+    bear_fvg = [z for z in zones if z["type"] == "bear"]
+    return bull_fvg[-max_zones:] + bear_fvg[-max_zones:]
 
 
 def _detect_ob_zones(df: pd.DataFrame, digits: int, atr: float, lookback: int = 180, max_zones: int = 3) -> list[dict]:
-    """直後のディスプレイスメントでOBを近似検出して返す（軽量版）。
-    Mitigated判定: OB形成後に価格がゾーン内に侵入した場合は除外する。
+    """TradingView準拠のOB検出。
+
+    BOSを引き起こした変位直前の逆色ローソク足をOrder Blockとして特定する。
+    - Bull OB : スウィング高値をブレイクしたBOSバーの直前にある最後の陰線 (close < open)
+    - Bear OB : スウィング安値をブレイクしたBOSバーの直前にある最後の陽線 (close > open)
+    - Mitigated: Bull OBはlowを下抜け、Bear OBはhighを上抜けした場合に除外
+      (ゾーン内タッチはエントリー機会のため除外しない)
     """
     zones: list[dict] = []
-    if df is None or len(df) < 8:
+    if df is None or len(df) < 10:
         return zones
 
     subset = df.tail(lookback).reset_index(drop=True)
-    disp_th = max(atr * 0.15, 1e-9)
-    end = len(subset) - 2  # 次の2本を参照するため末尾を除外
+    n = len(subset)
+    window = 3  # スウィング検出ウィンドウ
 
-    for i in range(2, end):
-        o = float(subset["open"].iloc[i])
-        c = float(subset["close"].iloc[i])
-        hi = float(subset["high"].iloc[i])
-        lo = float(subset["low"].iloc[i])
-        next_close_1 = float(subset["close"].iloc[i + 1])
-        next_close_2 = float(subset["close"].iloc[i + 2])
+    # スウィング高値/安値を検出
+    swing_highs: list[tuple[int, float]] = []
+    swing_lows:  list[tuple[int, float]] = []
+    for i in range(window, n - window - 1):  # 末尾 window+1 本は未確定足として除外
+        h = float(subset["high"].iloc[i])
+        l = float(subset["low"].iloc[i])
+        if h == float(subset["high"].iloc[i - window: i + window + 1].max()):
+            swing_highs.append((i, h))
+        if l == float(subset["low"].iloc[i - window: i + window + 1].min()):
+            swing_lows.append((i, l))
 
-        if c < o and (next_close_1 - hi >= disp_th or next_close_2 - hi >= disp_th):
-            # Bull OB: 形成後に価格がゾーン内(lo～hi)に侵入したらMitigated除外
-            mitigated = any(
-                float(subset["low"].iloc[j]) <= hi
-                for j in range(i + 1, len(subset))
-            )
-            if not mitigated:
-                zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bull"})
+    seen_ob_bars: set[int] = set()  # 同一バーの重複登録を防止
 
-        if c > o and (lo - next_close_1 >= disp_th or lo - next_close_2 >= disp_th):
-            # Bear OB: 形成後に価格がゾーン内(lo～hi)に侵入したらMitigated除外
-            mitigated = any(
-                float(subset["high"].iloc[j]) >= lo
-                for j in range(i + 1, len(subset))
-            )
-            if not mitigated:
-                zones.append({"low": round(lo, digits), "high": round(hi, digits), "type": "bear"})
+    # ── Bull OB: スウィング高値BOS → 直前の最後の陰線 ──
+    for sw_idx, sw_price in swing_highs:
+        for j in range(sw_idx + 1, n - 1):  # n-1: 最終足は未確定
+            if float(subset["close"].iloc[j]) > sw_price:
+                # j がBOSバー。sw_idx〜j-1 の間で最後の陰線を逆順探索
+                ob_bar = None
+                for k in range(j - 1, sw_idx - 1, -1):
+                    if float(subset["close"].iloc[k]) < float(subset["open"].iloc[k]):
+                        ob_bar = k
+                        break
+                if ob_bar is None or ob_bar in seen_ob_bars:
+                    break
+                hi = float(subset["high"].iloc[ob_bar])
+                lo = float(subset["low"].iloc[ob_bar])
+                # Mitigated: OB形成後に low を下抜けたか (タッチは除外しない)
+                mitigated = any(
+                    float(subset["low"].iloc[m]) < lo
+                    for m in range(ob_bar + 1, n)
+                )
+                if not mitigated:
+                    seen_ob_bars.add(ob_bar)
+                    zones.append({
+                        "low": round(lo, digits),
+                        "high": round(hi, digits),
+                        "type": "bull",
+                        "bar_offset": n - 1 - ob_bar,
+                    })
+                break  # このスウィング高値に対するBOSは1件だけ処理
 
-    return zones[-max_zones:]
+    # ── Bear OB: スウィング安値BOS → 直前の最後の陽線 ──
+    for sw_idx, sw_price in swing_lows:
+        for j in range(sw_idx + 1, n - 1):
+            if float(subset["close"].iloc[j]) < sw_price:
+                # j がBOSバー。直前の最後の陽線を逆順探索
+                ob_bar = None
+                for k in range(j - 1, sw_idx - 1, -1):
+                    if float(subset["close"].iloc[k]) > float(subset["open"].iloc[k]):
+                        ob_bar = k
+                        break
+                if ob_bar is None or ob_bar in seen_ob_bars:
+                    break
+                hi = float(subset["high"].iloc[ob_bar])
+                lo = float(subset["low"].iloc[ob_bar])
+                # Mitigated: OB形成後に high を上抜けたか (タッチは除外しない)
+                mitigated = any(
+                    float(subset["high"].iloc[m]) > hi
+                    for m in range(ob_bar + 1, n)
+                )
+                if not mitigated:
+                    seen_ob_bars.add(ob_bar)
+                    zones.append({
+                        "low": round(lo, digits),
+                        "high": round(hi, digits),
+                        "type": "bear",
+                        "bar_offset": n - 1 - ob_bar,
+                    })
+                break  # このスウィング安値に対するBOSは1件だけ処理
+
+    # bull/bear 別に最新 max_zones 件ずつ返す (片側トレンド時に一方が全滅しないよう)
+    bull_zones = [z for z in zones if z["type"] == "bull"]
+    bear_zones = [z for z in zones if z["type"] == "bear"]
+    return bull_zones[-max_zones:] + bear_zones[-max_zones:]
 
 def get_price_levels(symbol: str, digits: int = 5) -> dict:
     """SMC分析用の価格レベルを計算して返す。

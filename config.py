@@ -145,6 +145,12 @@ ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
     "USDJPY": 1.0,
     "EURUSD": 0.8,
 }
+# ATR倍率ベースのSL計算時の最大幅（上限キャップ: swept_levelが遠い場合のロット計算崩壊防止）
+ENTRY_MAX_SL_ATR_MULT = float(os.getenv("ENTRY_MAX_SL_ATR_MULT", "6.0"))
+# 銘柄別の最大SL幅上書き（ATR倍率使用時のみ）
+ENTRY_MAX_SL_ATR_MULT_BY_SYMBOL: dict = {
+    "GOLD": 5.0,        # GOLD# ATR M15≈$20-40 → 上限$100-200
+}
 EXIT_MIN_CONFIDENCE = int(os.getenv("EXIT_MIN_CONFIDENCE", "45"))
 FORCE_EXIT_ON_PREMISE_BREAK = os.getenv("FORCE_EXIT_ON_PREMISE_BREAK", "true").lower() == "true"
 MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK = int(os.getenv("MIN_HOLD_MINUTES_BEFORE_FORCE_PREMISE_BREAK", "30"))

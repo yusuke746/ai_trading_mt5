@@ -148,22 +148,16 @@ def analyze_entry(symbol: str, current_price: float,
             _expected_dir = "SELL" if _sweep_dir == "HIGH" else ("BUY" if _sweep_dir == "LOW" else "BUY or SELL")
             setup_condition = f"""
 【セットアップ条件 — 逆張り (Liquidity Sweep後の反転)】
-⚠️ エントリー方向ルール (厳守):
-  - HIGH sweep (上方向の流動性を刈り取った) → 必ず SELL でエントリー
-  - LOW sweep (下方向の流動性を刈り取った) → 必ず BUY でエントリー
-  今回の sweep方向: {_sweep_dir} → 正しい decision: {_expected_dir}
+🚨 エントリー方向ルール (システム強制 — 違反はSKIPに自動変換):
+  - HIGH sweep → decision=SELL / smc_sweep_direction="HIGH"
+  - LOW sweep  → decision=BUY  / smc_sweep_direction="LOW"
+  今回のsweep方向 (Python確定): {_sweep_dir} → decision={_expected_dir}, smc_sweep_direction="{_sweep_dir}"
+  ※ 方向が違う場合はシステムが自動的にSKIPに書き換えます。方向以外の判断はAIに委ねます。
 
-チャートのLiquidityライン・OB・FVGゾーンを確認し、以下をすべて満たす場合のみエントリー:
-  ① H1とM15のオーダーフロー方向が一致している
-  ② Liquidityラインを ATR({atr_h1:.5f})×{config.SMC_SWEEP_ATR_MULT}以上 侵食後に反転したSweepが確認できる
-  ③ Sweep後にBOS/長ヒゲ/Engulfingの反転アクションがある
-  → smc_liquidity_sweep=true が必須
-
-⚠️ OBゾーン位置チェック (必須):
-  - チャートの「Bull OB」「Bear OB」ゾーンと現在価格の位置関係を必ず確認すること
-  - SELL判断の場合: 現在価格がBull OBゾーン内またはBull OB上端以上にある → confidence -25。Bull OBがサポートとして機能している間のSELLは高リスク。Bull OBの下限を明確に割っていない限りSKIPを強く推奨
-  - BUY判断の場合: 現在価格がBear OBゾーン内またはBear OB下端以下にある → confidence -25。Bear OBがレジスタンスとして機能している間のBUYは高リスク。Bear OBの上限を明確に超えていない限りSKIPを強く推奨
-  - Sweep後に既に ATR×1.5以上移動している場合: エントリー遅延の可能性 → confidence -15
+チャートのLiquidityライン・OB・FVGゾーンを確認し、エントリー可否を総合的に判断してください:
+  ① Liquidityラインを ATR({atr_h1:.5f})×{config.SMC_SWEEP_ATR_MULT}以上 侵食後に反転したSweepがあるか
+  ② Sweep後にBOS/長ヒゲ/Engulfingの反転アクションがあるか
+  ③ OB/FVG/構造レベルで十分なTPターゲットがあるか
 """
     else:
         setup_condition = ""
@@ -188,14 +182,15 @@ alignment は「H1トレンド方向とエントリー方向が一致してい�
   - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中だが逆張りBUY)
 ⚠️ 逆張りSweep (REVERSAL_SWEEP) では alignment=false が自然です。H1逆行の反転セットアップのため、
   alignment=false はSKIPにはなりません。現状を正確に返してください。"""
+        _s_dir = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
+        _e_dir = "SELL" if _s_dir == "HIGH" else ("BUY" if _s_dir == "LOW" else "BUY or SELL")
         _skip_section = f"""\
-【SKIP条件 (1つでも該当したらSKIP)】
-- confidence < 75 (逆張りSweepは構造リスクがあるため基準引き上げ)
-- smc_liquidity_sweep=false (Sweep確認が必須)
-- Sweep方向と決定方向の矛盾 (HIGH sweep→SELL / LOW sweep→BUY のみ有効)
-- 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
-- 外部ニュース監視で重大リスクが検知されている場合
-※ h1_trend=SIDEWAYS および alignment=false はREVERSAL_SWEEPではSKIP条件ではありません"""
+【SKIP基準 (あなたの総合判断で決定してください)】
+- Sweep後の反転根拠が弱い (OB/FVG/BOSが確認できない、またはSweepが偽物)
+- TPターゲットまでの伸び代が構造的に不十分
+- その他、エントリーするには構造リスクが高すぎると判断した場合
+※ alignment=false / h1_trend=SIDEWAYS は REVERSAL_SWEEP では自然であり、SKIP理由になりません
+🚨 システム強制: {_s_dir} sweep → {_e_dir} のみ有効。方向が違う場合は自動SKIP。"""
     else:
         _alignment_section = """\
 【alignmentフィールドのルール (重要)】
@@ -206,16 +201,11 @@ alignment は「H1トレンド方向とエントリー方向が一致してい�
   - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中の逆張りBUY  = トレンド不一致)
 ⚠️ h1_trend="UP"+decision="SELL" で alignment=true と回答するのは論理的に誤りです。必ずfalseとしてください。"""
         _skip_section = """\
-【SKIP条件 (1つでも該当したらSKIP)】
-- confidence < 70
-- h1_trend = SIDEWAYS
-- H1とM15のトレンドが不一致 (alignment=false)
-- h1_trend="UP" かつ decision="SELL" (上昇トレンド中の逆張りSELL → alignment=falseとなり上記に該当)
-- h1_trend="DOWN" かつ decision="BUY" (下降トレンド中の逆張りBUY → alignment=falseとなり上記に該当)
-- 機械ゲート rr_pass=False かつ伸び代を具体的に説明できない
-- 逆張り: smc_liquidity_sweep=false
-- 順張り: smc_ob_confirmed=false
-- 外部ニュース監視で重大リスクが検知されている場合"""
+【SKIP基準 (あなたの総合判断で決定してください)】
+- BOSが確認できない、またはトレンド継続性に疑問がある
+- OB/FVGへの押し目/戻しが確認できない
+- TPターゲットまでの伸び代が不十分
+- その他、構造的にエントリーリスクが高いと判断した場合"""
 
     prompt = f"""あなたはSMCアナリストです。
 H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済み）を見て
@@ -480,52 +470,32 @@ def _should_run_final_approval(symbol: str, signal: EntrySignal) -> bool:
     if signal.decision not in {"BUY", "SELL"}:
         return False
     # guards通過済みのシグナルはalignmentによるブロック不要 (REVERSAL_SWEEPはalignment=falseが自然)
-    return symbol in config.FINAL_APPROVAL_SYMBOLS or signal.confidence >= config.FINAL_APPROVAL_MIN_CONFIDENCE
+    # KIWAMI口座は"GOLD#"等の#付きシンボルを使うため正規化して比較する
+    _sym_norm = str(symbol).rstrip("#.").upper()
+    _in_list = symbol in config.FINAL_APPROVAL_SYMBOLS or _sym_norm in {
+        s.rstrip("#.").upper() for s in config.FINAL_APPROVAL_SYMBOLS
+    }
+    return _in_list or signal.confidence >= config.FINAL_APPROVAL_MIN_CONFIDENCE
 
 
 def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = None) -> EntrySignal:
-    """LLMの矛盾したエントリー判断をSKIPに矯正する。"""
+    """Sweep方向矛盾のみSKIPに強制矯正する（それ以外はAIの判断を尊重）。"""
     if signal.decision not in {"BUY", "SELL"}:
         return signal
 
     skip_reasons: list[str] = []
     entry_type = mech_gate.get("entry_type") if mech_gate else None
-    is_reversal = (entry_type == "REVERSAL_SWEEP")
-
-    # 信頼度: 逆張りSweepはalignment保証がないため基準を少し上げる
-    min_conf = 75 if is_reversal else 70
-    if signal.confidence < min_conf:
-        skip_reasons.append(f"confidence_below_{min_conf}")
-
-    # SIDEWAYS: 逆張りSweepはレンジ両端の反転狙いのため許容
-    if signal.h1_trend == "SIDEWAYS" and not is_reversal:
-        skip_reasons.append("h1_sideways")
-
-    # alignment: 逆張りSweepは本質的にH1逆行が多いため要求しない
-    if not signal.alignment and not is_reversal:
-        skip_reasons.append("trend_misalignment")
-
-    # H1トレンド × 方向矛盾チェック (REVERSAL_SWEEPでは適用しない)
-    if not is_reversal:
-        if signal.h1_trend == "UP" and signal.decision == "SELL":
-            skip_reasons.append("h1_up_but_sell")
-        if signal.h1_trend == "DOWN" and signal.decision == "BUY":
-            skip_reasons.append("h1_down_but_buy")
-    # mechanical_rr / mechanical_bos は main.py で AI呼び出し前にチェック済み
-    # ここでは重複チェックしない
-
     mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
 
-    if entry_type == "REVERSAL_SWEEP" and not signal.smc_liquidity_sweep:
-        skip_reasons.append("reversal_without_sweep")
+    # Sweep方向とAI報告方向の矛盾 (Pythonが確定した方向とAIの報告が食い違う場合)
     if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"} and signal.smc_sweep_direction != mech_sweep_type:
         skip_reasons.append("sweep_direction_mismatch")
+
+    # Sweep方向とエントリー方向の矛盾 (HIGH sweep→SELL / LOW sweep→BUY のみ有効)
     if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"}:
         expected_dir = "SELL" if mech_sweep_type == "HIGH" else "BUY"
         if signal.decision != expected_dir:
             skip_reasons.append(f"reversal_direction_wrong(sweep={mech_sweep_type},expected={expected_dir},got={signal.decision})")
-    if entry_type == "CONTINUATION_BOS" and not signal.smc_ob_confirmed:
-        skip_reasons.append("continuation_without_ob")
 
     if not skip_reasons:
         return signal

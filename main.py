@@ -828,7 +828,14 @@ def _check_entry(symbol: str):
 
         if mech_entry_type == "REVERSAL_SWEEP" and mech_swept_level is not None:
             spread = price_info["ask"] - price_info["bid"]
-            buffer = max(atr_m15 * 0.2, spread * 2)
+            # GOLD/高ボラ銘柄: H1 ATR基準のバッファで swept_level 外側に十分な余裕を確保
+            # M15 ATR × 0.2 では極小になるため H1 ATR × 0.25 を下限とする
+            if symbol_key == "GOLD":
+                buffer = max(atr_h1 * 0.30, atr_m15 * 1.5, spread * 3)
+            elif symbol_key in ("US100CASH", "OILCASH"):
+                buffer = max(atr_h1 * 0.20, atr_m15 * 1.0, spread * 3)
+            else:
+                buffer = max(atr_h1 * 0.15, atr_m15 * 0.8, spread * 2)
             if direction == "SELL":
                 structural_sl = round(mech_swept_level + buffer, digits)
                 structural_sl_dist = structural_sl - entry_price
@@ -863,7 +870,14 @@ def _check_entry(symbol: str):
             symbol_key,
             config.ENTRY_MIN_SL_ATR_MULT,
         )
-        min_sl_distance = atr_m15 * min_sl_mult
+        # GOLD: H1 ATR × 1.0 を最小フロアとして追加（M15 ATRが低ボラ時に極小化する問題を防止）
+        # US100Cash/OILCash: H1 ATR × 0.5 を最小フロアとして追加
+        if symbol_key == "GOLD":
+            min_sl_distance = max(atr_h1 * 1.0, atr_m15 * min_sl_mult)
+        elif symbol_key in ("US100CASH", "OILCASH"):
+            min_sl_distance = max(atr_h1 * 0.5, atr_m15 * min_sl_mult)
+        else:
+            min_sl_distance = atr_m15 * min_sl_mult
         if sl_distance < min_sl_distance:
             old_sl_distance = sl_distance
             sl_distance = min_sl_distance
@@ -872,14 +886,62 @@ def _check_entry(symbol: str):
             else:
                 sl_price = round(entry_price + sl_distance, digits)
             logger.warning(
-                "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f symbol=%s)",
+                "[Entry] %s: SL下限適用 old=%.5f floor=%.5f (atr_m15=%.5f × %.2f atr_h1=%.5f symbol=%s)",
                 symbol,
                 old_sl_distance,
                 min_sl_distance,
                 atr_m15,
                 min_sl_mult,
+                atr_h1,
                 symbol_key,
             )
+
+        # ── SL上限キャップ (swept_levelが遠い場合にロット計算が崩壊するのを防ぐ) ──
+        max_sl_mult = config.ENTRY_MAX_SL_ATR_MULT_BY_SYMBOL.get(
+            symbol_key,
+            config.ENTRY_MAX_SL_ATR_MULT,
+        )
+        # GOLD: H1 ATR × 3.0 を上限とし、min_sl > max_sl の矛盾を防ぐ
+        # US100Cash/OILCash: H1 ATR × 2.0 を上限として追加
+        if symbol_key == "GOLD":
+            max_sl_distance = max(atr_h1 * 3.0, atr_m15 * max_sl_mult)
+        elif symbol_key in ("US100CASH", "OILCASH"):
+            max_sl_distance = max(atr_h1 * 2.0, atr_m15 * max_sl_mult)
+        else:
+            max_sl_distance = atr_m15 * max_sl_mult
+        if sl_distance > max_sl_distance:
+            old_sl_distance = sl_distance
+            sl_distance = max_sl_distance
+            if direction == "BUY":
+                sl_price = round(entry_price - sl_distance, digits)
+            else:
+                sl_price = round(entry_price + sl_distance, digits)
+            logger.warning(
+                "[Entry] %s: SL上限適用 old=%.5f cap=%.5f (atr_m15=%.5f × %.1f atr_h1=%.5f symbol=%s)",
+                symbol,
+                old_sl_distance,
+                max_sl_distance,
+                atr_m15,
+                max_sl_mult,
+                atr_h1,
+                symbol_key,
+            )
+
+    # ── sl_price sanity check (SLが確実にエントリーの不利側にあることを保証) ──
+    if direction == "BUY" and sl_price >= entry_price:
+        logger.error(
+            "[Entry] %s: BUY SL(%.5f) >= entry(%.5f) — 異常値フォールバック",
+            symbol, sl_price, entry_price,
+        )
+        sl_distance = atr_m15 * 1.5
+        sl_price = round(entry_price - sl_distance, digits)
+    elif direction == "SELL" and sl_price <= entry_price:
+        logger.error(
+            "[Entry] %s: SELL SL(%.5f) <= entry(%.5f) — 異常値フォールバック",
+            symbol, sl_price, entry_price,
+        )
+        sl_distance = atr_m15 * 1.5
+        sl_price = round(entry_price + sl_distance, digits)
 
     logger.info(
         "[EntryMonitor] %s: entry_type=%s dir=%s balance=%.0f risk_per_trade=%.2f%% atr_m15=%.5f sl_dist=%.5f sl=%.5f",
@@ -1002,9 +1064,13 @@ def _reconcile_orphaned_db_trades():
         deal_info = mt5_connector.get_closed_deal_by_ticket(ticket)
         if deal_info:
             # シンボル不一致検知: dealが別銘柄のものならデータ不正のため無視
+            # MT5は "US100Cash#" のように # 付きで返すが DB は "US100Cash" で保存されるため
+            # 正規化して比較する（大文字統一 + 末尾の # 除去）
             deal_symbol = deal_info.get("symbol", "")
             expected_symbol = trade.get("symbol", "")
-            if deal_symbol and deal_symbol != expected_symbol:
+            deal_symbol_norm = deal_symbol.rstrip("#").strip().upper()
+            expected_symbol_norm = expected_symbol.rstrip("#").strip().upper()
+            if deal_symbol_norm and deal_symbol_norm != expected_symbol_norm:
                 logger.error(
                     "[Reconcile] シンボル不一致: DB=%s deal_symbol=%s ticket=%s → 今回はDB更新せず次サイクル再試行",
                     expected_symbol, deal_symbol, ticket,
@@ -1461,9 +1527,11 @@ def _should_emergency_exit(pos: dict) -> tuple[bool, str]:
         adverse_move = float(current_close - pos["price_open"])
         structure_break = current_close > current_ma and prev_close > prev_ma
 
-    adverse_atr_threshold = config.EMERGENCY_EXIT_ADVERSE_ATR_BY_SYMBOL.get(
-        symbol,
-        config.EMERGENCY_EXIT_ADVERSE_ATR,
+    _sym_key = str(symbol).rstrip("#.").upper()
+    adverse_atr_threshold = (
+        config.EMERGENCY_EXIT_ADVERSE_ATR_BY_SYMBOL.get(symbol)
+        or config.EMERGENCY_EXIT_ADVERSE_ATR_BY_SYMBOL.get(_sym_key)
+        or config.EMERGENCY_EXIT_ADVERSE_ATR
     )
     atr_spike = current_atr >= baseline_atr * config.EMERGENCY_EXIT_ATR_SPIKE_MULTIPLIER
     adverse_break = adverse_move >= current_atr * adverse_atr_threshold

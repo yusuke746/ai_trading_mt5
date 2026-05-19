@@ -135,7 +135,7 @@ def _update_calendar() -> None:
 def _is_calendar_blocked(symbol: str) -> tuple[bool, str]:
     """経済カレンダーで直近±EVENT_BLOCK_MINUTESに高インパクト指標があればブロック。"""
     block_min = config.NEWS_EVENT_BLOCK_MINUTES
-    currencies = _SYMBOL_CURRENCIES.get(symbol, [])
+    currencies = _SYMBOL_CURRENCIES.get(symbol) or _SYMBOL_CURRENCIES.get(symbol.rstrip("#."), [])
     now_utc = datetime.now(UTC)
 
     with _lock:
@@ -193,7 +193,7 @@ def _fetch_finnhub_headlines(symbol: str, hours_back: int = 6) -> list[str]:
     if not api_key:
         return []
 
-    finnhub_sym = _FINNHUB_SYMBOL_MAP.get(symbol)
+    finnhub_sym = _FINNHUB_SYMBOL_MAP.get(symbol) or _FINNHUB_SYMBOL_MAP.get(symbol.rstrip("#."))
     if not finnhub_sym:
         return []
 
