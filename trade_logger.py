@@ -201,17 +201,20 @@ def get_symbol_recent_loss_streak(symbol: str, lookback: int = 10) -> dict:
 
     streak = 0
     last_closed_at = None
+    loss_closed_ats: list[str] = []  # 連敗各closeの時刻リスト（新しい順）
     for idx, r in enumerate(rows):
         if idx == 0:
             last_closed_at = r["closed_at"]
         if (r["result_profit"] or 0) < 0:
             streak += 1
+            loss_closed_ats.append(r["closed_at"])
         else:
             break
 
     return {
         "loss_streak": streak,
         "last_closed_at": last_closed_at,
+        "loss_closed_ats": loss_closed_ats,  # streak達成時刻の特定に使用
     }
 
 
@@ -225,7 +228,7 @@ def get_recent_premise_break_exit(symbol: str, direction: str) -> dict | None:
             WHERE symbol = ?
               AND direction = ?
               AND status = 'CLOSED'
-              AND exit_reason = 'PREMISE_BREAK'
+              AND exit_reason IN ('PREMISE_BREAK', 'EXIT_PREMISE_BREAK_MECH')
               AND closed_at IS NOT NULL
             ORDER BY datetime(closed_at) DESC
             LIMIT 1

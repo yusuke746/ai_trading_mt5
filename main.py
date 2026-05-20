@@ -477,13 +477,17 @@ def _check_entry(symbol: str):
         return
 
     # 連敗銘柄の過剰エントリー抑制（クールダウン）
+    # 基準時刻: streak達成時点（trigger本目の連敗のclose）→ 時間が散らばった連敗でも正しく発動
     loss_info = trade_logger.get_symbol_recent_loss_streak(symbol)
     streak = int(loss_info.get("loss_streak", 0))
-    last_closed_at = loss_info.get("last_closed_at")
-    if streak >= config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER and last_closed_at:
+    loss_closed_ats = loss_info.get("loss_closed_ats", [])
+    _trigger = config.SYMBOL_LOSS_STREAK_PAUSE_TRIGGER
+    if streak >= _trigger and len(loss_closed_ats) >= _trigger:
         try:
-            last_dt = _as_utc(datetime.fromisoformat(last_closed_at))
-            elapsed_min = (datetime.now(UTC) - last_dt).total_seconds() / 60
+            # trigger本目の連敗close時刻（DESC順なので index=trigger-1 が trigger番目に古い損失）
+            trigger_closed_at = loss_closed_ats[_trigger - 1]
+            trigger_dt = _as_utc(datetime.fromisoformat(trigger_closed_at))
+            elapsed_min = (datetime.now(UTC) - trigger_dt).total_seconds() / 60
             if elapsed_min < 0:
                 pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
             elif elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
@@ -496,7 +500,7 @@ def _check_entry(symbol: str):
                     config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES,
                 )
                 return
-        except ValueError:
+        except (ValueError, IndexError):
             pass
 
     tf_minutes = _timeframe_to_minutes(config.EXECUTION_TF)
@@ -521,31 +525,6 @@ def _check_entry(symbol: str):
                         block_minutes,
                         config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS,
                         recent_closed.get("exit_reason", "UNKNOWN"),
-                    )
-                    return
-            except ValueError:
-                pass
-
-    # 勝ちトレード後の再エントリー抑制
-    if config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_ENABLED:
-        recent_win = trade_logger.get_recent_winning_closed_trade(symbol)
-        win_closed_at = recent_win.get("closed_at") if recent_win else None
-        if win_closed_at:
-            try:
-                last_win_dt = _as_utc(datetime.fromisoformat(win_closed_at))
-                elapsed_min = (datetime.now(UTC) - last_win_dt).total_seconds() / 60
-                block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS
-                if elapsed_min < 0:
-                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
-                elif elapsed_min < block_minutes:
-                    remaining_min = block_minutes - elapsed_min
-                    logger.warning(
-                        "[Entry] %s: 勝ち後クールダウン中 残り%.0f/%.0f min (%d bars, profit=%.0f) → スキップ",
-                        symbol,
-                        remaining_min,
-                        block_minutes,
-                        config.SYMBOL_REENTRY_COOLDOWN_AFTER_WIN_BARS,
-                        float(recent_win.get("result_profit") or 0),
                     )
                     return
             except ValueError:
@@ -873,14 +852,18 @@ def _check_entry(symbol: str):
             config.ENTRY_MIN_SL_ATR_MULT,
         )
         # GOLD: H1 ATR × 1.0 を最小フロアとして追加（M15 ATRが低ボラ時に極小化する問題を防止）
-        # US100Cash/OILCash: H1 ATR × 0.5 を最小フロアとして追加
-        # FXペア(EURUSD/USDJPY等): H1 ATR × 0.3 を最小フロアとして追加（薄い時間帯のスプレッド拡大対策）
+        # US100Cash/OILCash: H1 ATR × 1.0 を最小フロアとして追加（AIプロンプトのmech_structural_sl_distと一致させる）
+        # FXペア(EURUSD/USDJPY等): H1 ATR × 0.5 を最小フロアとして追加（旧0.3から引き上げ）
         if symbol_key == "GOLD":
             min_sl_distance = max(atr_h1 * 1.0, atr_m15 * min_sl_mult)
         elif symbol_key in ("US100CASH", "OILCASH"):
-            min_sl_distance = max(atr_h1 * 0.5, atr_m15 * min_sl_mult)
+            min_sl_distance = max(atr_h1 * 1.0, atr_m15 * min_sl_mult)
         else:
-            min_sl_distance = max(atr_h1 * 0.3, atr_m15 * min_sl_mult)
+            min_sl_distance = max(atr_h1 * 0.5, atr_m15 * min_sl_mult)
+        # mech_structural_sl_dist（AIプロンプトに「構造的SL幅(下限)」として提示した値）を追加フロアとして強制
+        # これにより実際のSLがAIに伝えた下限を必ず満たすことを保証する
+        if mech_structural_sl_dist is not None:
+            min_sl_distance = max(min_sl_distance, mech_structural_sl_dist)
         if sl_distance < min_sl_distance:
             old_sl_distance = sl_distance
             sl_distance = min_sl_distance
@@ -940,9 +923,9 @@ def _check_entry(symbol: str):
         if symbol_key == "GOLD":
             sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
         elif symbol_key in ("US100CASH", "OILCASH"):
-            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
+            sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
         else:
-            sl_distance = atr_m15 * 1.5
+            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
         sl_price = round(entry_price - sl_distance, digits)
     elif direction == "SELL" and sl_price <= entry_price:
         logger.error(
@@ -953,9 +936,9 @@ def _check_entry(symbol: str):
         if symbol_key == "GOLD":
             sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
         elif symbol_key in ("US100CASH", "OILCASH"):
-            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
+            sl_distance = max(atr_h1 * 1.0, atr_m15 * 1.5)
         else:
-            sl_distance = atr_m15 * 1.5
+            sl_distance = max(atr_h1 * 0.5, atr_m15 * 1.5)
         sl_price = round(entry_price + sl_distance, digits)
 
     logger.info(
@@ -1490,7 +1473,10 @@ def _manage_profit_protection(pos: dict):
     if candidate_sl is None:
         return
 
-    digits = mt5_connector.get_symbol_info(symbol)["digits"]
+    sym_info = mt5_connector.get_symbol_info(symbol)
+    if sym_info is None:
+        return
+    digits = sym_info["digits"]
     candidate_sl = round(candidate_sl, digits)
 
     if not _is_better_sl(pos["type"], current_sl, candidate_sl):
