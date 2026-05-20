@@ -836,7 +836,8 @@ def _check_entry(symbol: str):
             elif symbol_key in ("US100CASH", "OILCASH"):
                 buffer = max(atr_h1 * 0.20, atr_m15 * 1.0, spread * 3)
             else:
-                buffer = max(atr_h1 * 0.15, atr_m15 * 0.8, spread * 2)
+                # FXペア: H1 ATR × 0.25 を下限（薄い時間帯のスプレッド拡大で即座にSL到達しないよう）
+                buffer = max(atr_h1 * 0.25, atr_m15 * 0.8, spread * 3)
             if direction == "SELL":
                 structural_sl = round(mech_swept_level + buffer, digits)
                 structural_sl_dist = structural_sl - entry_price
@@ -873,12 +874,13 @@ def _check_entry(symbol: str):
         )
         # GOLD: H1 ATR × 1.0 を最小フロアとして追加（M15 ATRが低ボラ時に極小化する問題を防止）
         # US100Cash/OILCash: H1 ATR × 0.5 を最小フロアとして追加
+        # FXペア(EURUSD/USDJPY等): H1 ATR × 0.3 を最小フロアとして追加（薄い時間帯のスプレッド拡大対策）
         if symbol_key == "GOLD":
             min_sl_distance = max(atr_h1 * 1.0, atr_m15 * min_sl_mult)
         elif symbol_key in ("US100CASH", "OILCASH"):
             min_sl_distance = max(atr_h1 * 0.5, atr_m15 * min_sl_mult)
         else:
-            min_sl_distance = atr_m15 * min_sl_mult
+            min_sl_distance = max(atr_h1 * 0.3, atr_m15 * min_sl_mult)
         if sl_distance < min_sl_distance:
             old_sl_distance = sl_distance
             sl_distance = min_sl_distance
