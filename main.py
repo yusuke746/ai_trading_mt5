@@ -1576,10 +1576,15 @@ def _is_better_sl(direction: str, current_sl: float, candidate_sl: float) -> boo
 def _execute_exit(pos: dict, reasoning: str, action_type: str):
     """決済共通処理。"""
     _ACTION_TO_EXIT_REASON = {
-        "EXIT_CHECK":        "AI_EXIT",
-        "EXIT_EMERGENCY":    "EMERGENCY",
-        "EXIT_PREMISE_BREAK": "PREMISE_BREAK",
-        "EXIT_SESSION_CLOSE": "SESSION_CLOSE",
+        "EXIT_CHECK":               "AI_EXIT",
+        "EXIT_EMERGENCY":           "EMERGENCY",
+        "EXIT_PREMISE_BREAK":       "PREMISE_BREAK",
+        "EXIT_SESSION_CLOSE":       "SESSION_CLOSE",
+        "EXIT_WEEKEND_HOLDOVER":    "WEEKEND_HOLDOVER",
+        "EXIT_MARKET_STRESS":       "MARKET_STRESS",
+        "EXIT_PREMISE_BREAK_MECH":  "PREMISE_BREAK_MECH",
+        "EXIT_TP_HIT_MECH":         "TP_HIT_MECH",
+        "EXIT_TP_NEAR_REVERSAL_MECH": "TP_NEAR_REVERSAL_MECH",
     }
     exit_reason = _ACTION_TO_EXIT_REASON.get(action_type, action_type)
     symbol = pos["symbol"]
