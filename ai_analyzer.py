@@ -329,22 +329,26 @@ TP到達率が {tp_progress_pct:.0f}% です。チャートの緑点線（TP={tp
 }}"""
 
     else:  # NORMAL
-        task_section = """【task: NORMAL】
-M15画像から「TP目前での明確な反転シグナル」があるかだけ評価してください。
-不明確な場合は必ずHOLDを返してください。
+        task_section = f"""【task: NORMAL】
+TP到達率は {tp_progress_pct:.0f}% です（まだTP付近ではありません）。
+現在価格付近のローソク足とMAの状態を視覚的に確認してください。
 
-【HOLDデフォルト】シグナルが弱い・不明確 → HOLD
-【EXIT】TP付近の緑点線付近に明確な反転パターンが視覚的に確認できる → EXIT
+【HOLD】現在価格付近に明確な反転シグナルがない → HOLDデフォルト
+【EXIT】以下の両方が視覚的に確認できる場合のみEXIT:
+  ・現在価格付近でエントリー方向（{direction}）と逆の強い大ローソク足（包み足・急反転）が出ている
+  ・かつ MA（白い曲線）がエントリー方向と逆向きに明確に転換している
+
+不明確・片方だけ → 必ずHOLD
 
 【output JSON only】
-{
+{{
     "decision": "HOLD" or "EXIT",
     "confidence": 0-100,
     "entry_premise_valid": true,
     "invalidation_breached": false,
-    "reasoning": "短く1文で理由",
+    "reasoning": "現在価格付近のパターンとMAの状態を1文で説明",
     "news_impact": "N/A"
-}"""
+}}"""
 
     prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
 複雑な数値計算・相場予測は不要です。システムの機械判定の補助として、視覚パターンのみを確認してください。

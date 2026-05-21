@@ -686,6 +686,19 @@ def _check_entry(symbol: str):
             except ValueError:
                 pass
 
+    # H1トレンド方向を先行計算 (機械ゲートのトレンド逆行チェックで使用)
+    try:
+        _ma_h1_early = df_h1["close"].rolling(config.MA_PERIOD).mean().dropna()
+        _lookback_early = config.SMC_CONTINUATION_BOS_LOOKBACK_BARS
+        if len(_ma_h1_early) >= _lookback_early + 1:
+            _slope_early = float(_ma_h1_early.iloc[-1]) - float(_ma_h1_early.iloc[-(_lookback_early + 1)])
+            _thresh_early = atr_h1 * config.SMC_CONTINUATION_MA_SLOPE_ATR_MULT
+            h1_trend_early = "UP" if _slope_early >= _thresh_early else ("DOWN" if _slope_early <= -_thresh_early else "SIDEWAYS")
+        else:
+            h1_trend_early = "SIDEWAYS"
+    except Exception:
+        h1_trend_early = "SIDEWAYS"
+
     if config.SMC_FILTER_ENABLED and config.SMC_MECHANICAL_GATE_ENABLED:
         if mech_entry_type == "NONE":
             logger.info(
@@ -694,6 +707,22 @@ def _check_entry(symbol: str):
                 symbol, smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type,
             )
             return
+        # REVERSAL_SWEEP のトレンド逆行チェック
+        # HIGH sweep→SELL が DOWN トレンド順張り、LOW sweep→BUY が UP トレンド順張り
+        # それ以外（例: DOWN トレンドで LOW sweep→BUY）は逆張りとして弾く
+        # SIDEWAYS の場合はトレンドが不明確なので通す
+        if mech_entry_type == "REVERSAL_SWEEP" and h1_trend_early != "SIDEWAYS":
+            _sweep_aligned = (
+                (mech_sweep_type == "HIGH" and h1_trend_early == "DOWN") or
+                (mech_sweep_type == "LOW"  and h1_trend_early == "UP")
+            )
+            if not _sweep_aligned:
+                logger.info(
+                    "[Entry] %s: 機械ゲート: REVERSAL_SWEEPがH1トレンドに逆行 "
+                    "(sweep=%s h1_trend=%s) → スキップ",
+                    symbol, mech_sweep_type, h1_trend_early,
+                )
+                return
         # RR不足は AI呼び出し前にスキップ (コスト節約)
         # 例外: REVERSAL_SWEEPでbos_pass=TrueなときはAIがTPを精査できるため委任
         if not smc_rr_pass:
@@ -728,16 +757,9 @@ def _check_entry(symbol: str):
             )
             return
 
-    # H1トレンド方向を算出 (M15チャート背景色用)
+    # H1トレンド方向 (チャート背景色用) = 機械ゲート前に計算済みの値を再利用
     try:
-        _ma_h1 = df_h1["close"].rolling(config.MA_PERIOD).mean().dropna()
-        _lookback = config.SMC_CONTINUATION_BOS_LOOKBACK_BARS
-        if len(_ma_h1) >= _lookback + 1:
-            _slope = float(_ma_h1.iloc[-1]) - float(_ma_h1.iloc[-(_lookback + 1)])
-            _thresh = atr_h1 * config.SMC_CONTINUATION_MA_SLOPE_ATR_MULT
-            h1_trend_for_chart = "UP" if _slope >= _thresh else ("DOWN" if _slope <= -_thresh else "SIDEWAYS")
-        else:
-            h1_trend_for_chart = "SIDEWAYS"
+        h1_trend_for_chart = h1_trend_early
     except Exception:
         h1_trend_for_chart = "SIDEWAYS"
 
