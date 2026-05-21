@@ -46,24 +46,13 @@ def _get_openrouter_client() -> OpenAI:
 
 @dataclass
 class EntrySignal:
-    decision: str       # "BUY", "SELL", "SKIP"
-    confidence: int     # 0-100
-    h1_trend: str       # "UP", "DOWN", "SIDEWAYS"
-    m15_signal: str
-    alignment: bool     # H1とM15のトレンド一致
+    decision: str                    # "BUY", "SELL", "SKIP"
+    confidence: int                  # 0-100
+    m15_signal_visual_check: str     # 視覚的確認の説明
     reasoning: str
-    news_impact: str
-    sl_distance: float  # 推奨SL幅 (price単位)
-    tp_distance: float  # 推奨TP幅 (price単位)
-    raw_response: str   # AI生テキスト
-    # SMC分析結果
-    smc_liquidity_sweep: bool = False   # Liquidity Sweep発生
-    smc_sweep_direction: str = "NONE"   # "HIGH" / "LOW" / "NONE"
-    smc_ob_confirmed: bool = False      # Order Block再テスト確認
-    smc_fvg_present: bool = False       # Fair Value Gap存在
+    raw_response: str                # AI生テキスト
     approved_by_final_model: bool = False
     final_model_name: str = ""
-    invalidation_price: float | None = None  # SMC構造が完全に崩壊する無効化ライン
 
 
 @dataclass
@@ -96,148 +85,64 @@ def analyze_entry(symbol: str, current_price: float,
     h1_b64 = chart_capture.chart_to_base64(h1_image)
     m15_b64 = chart_capture.chart_to_base64(m15_image)
 
-    # エントリータイプを先に特定しておく
     _mech_entry_type = mech_gate.get("entry_type", "REVERSAL_SWEEP") if mech_gate else "REVERSAL_SWEEP"
+    _mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
+    _expected_dir = "BUY" if _mech_sweep_type == "LOW" else ("SELL" if _mech_sweep_type == "HIGH" else "BUY or SELL")
 
-    # ── 機械ゲート結果をプロンプトに組み込む ──
-    if mech_gate:
-        _entry_type_label = {
-            "REVERSAL_SWEEP":  "逆張り (Liquidity Sweep後の反転)",
-            "CONTINUATION_BOS": "順張り (BOS後の押し目/戻し)",
-        }.get(_mech_entry_type, "不明")
-        _swept_level = mech_gate.get("swept_level")
-        _structural_sl_dist = mech_gate.get("structural_sl_dist")
-        _swept_line = (
-            f"\n- Sweepされた流動性レベル(Python検出・確定): {_swept_level:.5f}"
-            if _swept_level is not None else ""
-        )
-        _sl_floor_line = (
-            f"\n- 構造的SL幅(Python計算・下限): {_structural_sl_dist:.5f} ← sl_distanceはこれ以上であること"
-            if _structural_sl_dist is not None else ""
-        )
-        _rr_note = ""
-        if not mech_gate.get("rr_pass") and _mech_entry_type == "REVERSAL_SWEEP":
-            _rr_note = (
-                "\n  ⚠️ 機械的RRは不足しているが、チャート上のOB/FVG/構造レベルを"
-                "精査し十分なTPターゲットがあればエントリー可。"
-                "tp_distanceには構造的TP候補(OB端/FVG中心/PDH/PDL等)までの距離を返すこと。"
-            )
-        mech_section = f"""
-【機械判定ゲート (Python計算済み・確定事実)】
-- エントリータイプ: {_mech_entry_type} ({_entry_type_label})
-- Sweep検出: {mech_gate.get('sweep_pass', 'N/A')} (方向: {mech_gate.get('sweep_type', 'N/A')}){_swept_line}{_sl_floor_line}
-- BOS/MAトレンド確認: {mech_gate.get('bos_pass', 'N/A')}
-- RR充足 (最低{config.ENTRY_MIN_TP_R:.1f}R以上): {mech_gate.get('rr_pass', 'N/A')}{_rr_note}
-"""
-    else:
-        mech_section = ""
+    if _mech_entry_type == "CONTINUATION_BOS":
+        prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+複雑な数値計算や相場予測は不要です。画像に描画されている図形（ゾーン）とローソク足の位置関係・形状だけを確認し、以下の条件を満たしているか判定してください。
 
-    # ── セットアップ別の必須条件 (SMCフィルタ有効時) ──
-    if config.SMC_FILTER_ENABLED:
-        if _mech_entry_type == "CONTINUATION_BOS":
-            setup_condition = """
-【セットアップ条件 — 順張り (BOS後の押し目/戻し)】
-チャートのBOS/OB/FVGゾーンを確認し、以下をすべて満たす場合のみエントリー:
-  ① H1とM15のオーダーフロー方向が一致している
-  ② 明確なBOSが確認でき、トレンド方向が確立されている
-  ③ 押し目/戻しがOBまたはFVGゾーンに到達し、反転シグナルがある
-  → smc_ob_confirmed=true が必須
-"""
-        else:
-            _sweep_dir = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
-            _expected_dir = "SELL" if _sweep_dir == "HIGH" else ("BUY" if _sweep_dir == "LOW" else "BUY or SELL")
-            setup_condition = f"""
-【セットアップ条件 — 逆張り (Liquidity Sweep後の反転)】
-🚨 エントリー方向ルール (システム強制 — 違反はSKIPに自動変換):
-  - HIGH sweep → decision=SELL / smc_sweep_direction="HIGH"
-  - LOW sweep  → decision=BUY  / smc_sweep_direction="LOW"
-  今回のsweep方向 (Python確定): {_sweep_dir} → decision={_expected_dir}, smc_sweep_direction="{_sweep_dir}"
-  ※ 方向が違う場合はシステムが自動的にSKIPに書き換えます。方向以外の判断はAIに委ねます。
+【前提条件 (Python判定済み事実)】
+・エントリータイプ: CONTINUATION_BOS (トレンドフォロー/BOS後の押し目・戻し)
+・判定方向: {_expected_dir}
+※BUYの場合のみBUYを、SELLの場合のみSELLを判定し、逆の場合はSKIPとしてください。
 
-チャートのLiquidityライン・OB・FVGゾーンを確認し、エントリー可否を総合的に判断してください:
-  ① Liquidityラインを ATR({atr_h1:.5f})×{config.SMC_SWEEP_ATR_MULT}以上 侵食後に反転したSweepがあるか
-  ② Sweep後にBOS/長ヒゲ/Engulfingの反転アクションがあるか
-  ③ OB/FVG/構造レベルで十分なTPターゲットがあるか
-"""
-    else:
-        setup_condition = ""
+【視覚的チェック項目】
+① トレンド確認: H1チャートのMA（白い曲線）が{_expected_dir}方向に傾斜し、ローソク足の流れが一方向のトレンドを示しているか？
+② OB/FVGへの押し目: 現在のローソク足が、チャートに描画された色付きゾーン（緑＝Bull OB、青＝FVG）に到達または接触しているか？（BUYの場合）または（赤＝Bear OB）に接触しているか？（SELLの場合）
+③ 空間的ゆとり: {_expected_dir}方向のすぐ先に、逆方向の分厚いゾーン（障害物）が立ち塞がっていないか？視覚的に価格が伸びるスペースがあるか？
 
-    _symbol_key = str(symbol).rstrip("#.").upper()
-    gold_safety_note = ""
-    if _symbol_key == "GOLD":
-        gold_safety_note = f"""
-【GOLD専用の注意】
-- GOLDはヒゲ/ノイズが大きいため、無効化ライン(invalidation_price)を現在値に近づけすぎないこと。
-- invalidation_price は、エントリー価格から最低でも M15 ATR({atr_m15:.5f}) × 1.0 以上離れた構造破綻レベルを返すこと。
-"""
-
-    # ── エントリータイプ別: alignment / SKIP条件セクション ──────────────────────
-    if _mech_entry_type == "REVERSAL_SWEEP":
-        _alignment_section = """\
-【alignmentフィールドのルール】
-alignment は「H1トレンド方向とエントリー方向が一致しているか」を示す参考フラグです。
-  - h1_trend="UP"   かつ decision="BUY"  → alignment=true
-  - h1_trend="DOWN" かつ decision="SELL" → alignment=true
-  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中だが逆張りSELL)
-  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中だが逆張りBUY)
-⚠️ 逆張りSweep (REVERSAL_SWEEP) では alignment=false が自然です。H1逆行の反転セットアップのため、
-  alignment=false はSKIPにはなりません。現状を正確に返してください。"""
-        _s_dir = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
-        _e_dir = "SELL" if _s_dir == "HIGH" else ("BUY" if _s_dir == "LOW" else "BUY or SELL")
-        _skip_section = f"""\
-【SKIP基準 (あなたの総合判断で決定してください)】
-- Sweep後の反転根拠が弱い (OB/FVG/BOSが確認できない、またはSweepが偽物)
-- TPターゲットまでの伸び代が構造的に不十分
-- その他、エントリーするには構造リスクが高すぎると判断した場合
-※ alignment=false / h1_trend=SIDEWAYS は REVERSAL_SWEEP では自然であり、SKIP理由になりません
-🚨 システム強制: {_s_dir} sweep → {_e_dir} のみ有効。方向が違う場合は自動SKIP。"""
-    else:
-        _alignment_section = """\
-【alignmentフィールドのルール (重要)】
-alignment は「H1トレンド方向とエントリー方向が一致しているか」を示すフラグです。
-  - h1_trend="UP"   かつ decision="BUY"  → alignment=true  (上昇トレンドに乗る順張り)
-  - h1_trend="DOWN" かつ decision="SELL" → alignment=true  (下降トレンドに乗る順張り)
-  - h1_trend="UP"   かつ decision="SELL" → alignment=false (H1上昇中の逆張りSELL = トレンド不一致)
-  - h1_trend="DOWN" かつ decision="BUY"  → alignment=false (H1下降中の逆張りBUY  = トレンド不一致)
-⚠️ h1_trend="UP"+decision="SELL" で alignment=true と回答するのは論理的に誤りです。必ずfalseとしてください。"""
-        _skip_section = """\
-【SKIP基準 (あなたの総合判断で決定してください)】
-- BOSが確認できない、またはトレンド継続性に疑問がある
-- OB/FVGへの押し目/戻しが確認できない
-- TPターゲットまでの伸び代が不十分
-- その他、構造的にエントリーリスクが高いと判断した場合"""
-
-    prompt = f"""あなたはSMCアナリストです。
-H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済み）を見て
-{symbol}のエントリー判断をしてください。
-{mech_section}
-【市場データ】
-- 銘柄: {symbol} / 現在価格: {current_price}
-- M15 ATR: {atr_m15:.5f} / H1 ATR: {atr_h1:.5f}
-- 口座残高: ¥{balance:,.0f}
-{gold_safety_note}
-{setup_condition}
-{_alignment_section}
-
-{_skip_section}
+【SKIP基準】
+・MAが横ばいでトレンドが視覚的に不明瞭。
+・現在価格がOB/FVGゾーンから明らかに離れている（タッチなし）。
+・{_expected_dir}方向にすぐ大きな障害ゾーンがある。
 
 【回答フォーマット (JSONのみ・コメント不要)】
 {{
-    "decision": "BUY" or "SELL" or "SKIP",
-    "confidence": 0-100,
-    "h1_trend": "UP" or "DOWN" or "SIDEWAYS",
-    "m15_signal": "エントリートリガーの説明",
-    "alignment": true or false,
-    "smc_liquidity_sweep": true or false,
-    "smc_sweep_direction": "HIGH" or "LOW" or "NONE",
-    "smc_ob_confirmed": true or false,
-    "smc_fvg_present": true or false,
-    "reasoning": "判断理由（チャートで確認した構造を簡潔に）",
-    "news_impact": "N/A (news_monitorにて別管理)",
-    "tp_distance": TP幅の数値(price単位、最低{config.ENTRY_MIN_TP_R:.1f}R以上)。チャートの構造レベル(次のOB/FVG/流動性/PDH/PDL)までの距離。,
-    "invalidation_price": SMC構造が完全に崩壊する具体的な価格(数値)。Sweepされた流動性レベル自体(例: swept_level=29117.86ならば29117.86付近)を返すこと。M15確定足の終値がこの価格を割った(BUY)/超えた(SELL)場合にシステムが強制EXITする
+  "decision": "BUY" または "SELL" または "SKIP",
+  "confidence": 0-100,
+  "m15_signal_visual_check": "チャート上で視覚的に確認できたMAの傾き、OB/FVGゾーンとの位置関係、価格の伸び代を簡潔に説明",
+  "reasoning": "最終判断の理由"
 }}
+必ずJSON形式のみで回答してください。"""
+    else:
+        # REVERSAL_SWEEP
+        _sweep_dir = _mech_sweep_type  # "HIGH" or "LOW"
+        prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+複雑な数値計算や相場予測は不要です。画像に描画されている図形（ゾーン）とローソク足の位置関係・形状だけを確認し、以下の条件を満たしているか判定してください。
 
+【前提条件 (Python判定済み事実)】
+・エントリータイプ: REVERSAL_SWEEP (Liquidity Sweep後の反転)
+・判定方向: {_sweep_dir}
+※LOW sweepの場合はBUYのみ、HIGH sweepの場合はSELLのみを検討し、逆の場合はSKIPとしてください。
+
+【視覚的チェック項目】
+① ヒゲの反発（Sweep）: ローソク足が、チャートの下部（または上部）にある主要なラインやゾーン（色のついた帯）を一度突き抜けた後、長いヒゲ（ピンバー）を残して内側に戻って確定しているか？
+② プライスアクション: ヒゲを付けた後、反転方向への強い動き（包み足、または反発を示す明確な大陽線/大陰線）が確認できるか？
+③ 空間的ゆとり: エントリー方向のすぐ目の前に、逆方向の分厚いゾーン（障害物）が立ち塞がっていないか？（視覚的に価格が伸びるスペースがあるか）
+
+【SKIP基準】
+・ヒゲが短すぎる、または実体でゾーンを完全に抜けてしまっている（ブレイクアウトになっている）。
+・反発の勢いが弱く、セットアップの形が視覚的に美しくない・不明確である。
+
+【回答フォーマット (JSONのみ・コメント不要)】
+{{
+  "decision": "BUY" または "SELL" または "SKIP",
+  "confidence": 0-100,
+  "m15_signal_visual_check": "チャート上で視覚的に確認できたヒゲの長さやローソク足の形状、描画ゾーンとの位置関係を簡潔に説明",
+  "reasoning": "最終判断の理由"
+}}
 必ずJSON形式のみで回答してください。"""
 
     try:
@@ -272,7 +177,7 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
         logger.info("[AI Entry] %s raw response length: %d", symbol, len(raw_text))
 
         primary_signal = _apply_entry_signal_guards(
-            _parse_entry_response(raw_text, atr_m15),
+            _parse_entry_response(raw_text),
             mech_gate=mech_gate,
         )
 
@@ -300,12 +205,9 @@ H1・M15チャート画像（BOS/CHoCH/OB/FVG/Liquidity/PDH/PDL/PWH/PWL描画済
         logger.error("[AI Entry] API呼び出しエラー: %s", e)
         return EntrySignal(
             decision="SKIP", confidence=0,
-            h1_trend="UNKNOWN", m15_signal="API Error",
-            alignment=False, reasoning=str(e),
-            news_impact="", sl_distance=atr_m15 * 1.5,
-            tp_distance=atr_m15 * 1.8,
+            m15_signal_visual_check="API Error",
+            reasoning=str(e),
             raw_response=str(e),
-            smc_liquidity_sweep=False,
         )
 
 
@@ -360,27 +262,61 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     m15_b64 = chart_capture.chart_to_base64(m15_image)
     safe_hold_minutes = max(0, hold_minutes)
 
-    # 無効化ラインブレイク判定は main.py 側で機械判定済み。
-    # nano には補助判定(反転シグナル有無)のみを依頼する。
-    inv_text = f"{invalidation_price:.5f}" if invalidation_price is not None else "N/A"
+    # ── Python側でTP到達率・フェーズを計算 ──
+    if tp_price is not None and entry_price is not None and tp_price != entry_price:
+        _total_dist = abs(tp_price - entry_price)
+        _current_dist = abs(current_price - entry_price)
+        tp_progress_pct = min(100.0, (_current_dist / _total_dist) * 100.0)
+    else:
+        tp_progress_pct = 0.0
 
+    _NEAR_TP_THRESHOLD = 75.0   # TP到達率75%以上 → NEAR_TPフェーズ
     _LONG_HOLD_THRESHOLD_MIN = 250
 
-    if safe_hold_minutes >= _LONG_HOLD_THRESHOLD_MIN:
-        task_section = f"""【task】
-保有時間が {safe_hold_minutes} 分に達しています。以下の2点を評価してください。
+    if tp_progress_pct >= _NEAR_TP_THRESHOLD:
+        phase = "NEAR_TP"
+    elif safe_hold_minutes >= _LONG_HOLD_THRESHOLD_MIN:
+        phase = "LONG_HOLD"
+    else:
+        phase = "NORMAL"
 
-1. TP目前での反転シグナル
-   - 明確な反転シグナルがある場合: decision="EXIT"
+    inv_text = f"{invalidation_price:.5f}" if invalidation_price is not None else "N/A"
+    tp_text  = f"{tp_price}"               if tp_price is not None             else "N/A"
+    sl_text  = f"{current_sl}"             if current_sl is not None           else "N/A"
 
-2. エントリー根拠の継続有効性（長時間保有チェック）
-   - 下記の状況が1つでも確認できる場合: decision="EXIT", entry_premise_valid=false
-     a) エントリーの根拠となったOB/BOS/MSSが現在の価格アクションで否定されている
-     b) トレンド構造がエントリー方向と逆のCHoCHを形成している
-     c) 価格がTP方向へ長時間進まず、明らかに横ばい・押し戻しを繰り返している
-   - 根拠が継続して有効: entry_premise_valid=true
+    # ── フェーズ別タスクセクション ──
+    if phase == "NEAR_TP":
+        task_section = f"""【task: NEAR_TP】
+TP到達率が {tp_progress_pct:.0f}% です。チャートの緑点線（TP={tp_text}）付近での「反転シグナル」を視覚的に確認してください。
 
-どちらにも該当しない場合: decision="HOLD"
+① TP付近のゾーン・ラインで長ヒゲ・ピンバーが出て跳ね返されているか？
+② 包み足または明確な大ローソクが逆方向に出ているか？
+
+【HOLDデフォルト】反転シグナルが弱い・不明確 → HOLD
+【EXIT】TP付近ゾーンでの明確な反転パターンが視覚的に確認できる → EXIT
+
+【output JSON only】
+{{
+    "decision": "HOLD" or "EXIT",
+    "confidence": 0-100,
+    "entry_premise_valid": true,
+    "invalidation_breached": false,
+    "reasoning": "TP付近の視覚パターンを1文で説明",
+    "news_impact": "N/A"
+}}"""
+
+    elif phase == "LONG_HOLD":
+        task_section = f"""【task: LONG_HOLD】
+保有時間が {safe_hold_minutes} 分経過、TP到達率は {tp_progress_pct:.0f}% です。
+チャートのMA（白い曲線）の向きとローソク足の流れを視覚的に確認してください。
+
+① MA（白い曲線）: 今もエントリー方向（{direction}）に傾いているか？逆方向に曲がっていないか？
+② 直近ローソク足の流れ: TP方向への動きが継続しているか、それとも横ばい・押し戻しを繰り返しているか？
+
+【HOLD】MAが方向維持、ローソク足がTP方向へ継続
+【EXIT (entry_premise_valid=false)】以下のいずれか:
+  ・MAが明確に逆転している（エントリー方向と逆向きに傾いている）
+  ・TP到達率が低くTP方向へ長時間動かない横ばい（TP到達率 {tp_progress_pct:.0f}% かつ停滞）
 
 【output JSON only】
 {{
@@ -388,14 +324,17 @@ def analyze_exit(symbol: str, direction: str, entry_price: float,
     "confidence": 0-100,
     "entry_premise_valid": true or false,
     "invalidation_breached": false,
-    "reasoning": "短く1文で理由（長時間保有起因の場合はその旨を明記）",
-    "news_impact": "N/A (news_monitor managed)"
+    "reasoning": "MAの向きとローソク足の状態を1文で説明",
+    "news_impact": "N/A"
 }}"""
-    else:
-        task_section = """【task】
-M15画像から「TP目前での反転シグナル」が明確かだけ評価してください。
-- 反転シグナルが明確: decision="EXIT"
-- 明確でない: decision="HOLD"
+
+    else:  # NORMAL
+        task_section = """【task: NORMAL】
+M15画像から「TP目前での明確な反転シグナル」があるかだけ評価してください。
+不明確な場合は必ずHOLDを返してください。
+
+【HOLDデフォルト】シグナルが弱い・不明確 → HOLD
+【EXIT】TP付近の緑点線付近に明確な反転パターンが視覚的に確認できる → EXIT
 
 【output JSON only】
 {
@@ -404,30 +343,23 @@ M15画像から「TP目前での反転シグナル」が明確かだけ評価し
     "entry_premise_valid": true,
     "invalidation_breached": false,
     "reasoning": "短く1文で理由",
-    "news_impact": "N/A (news_monitor managed)"
+    "news_impact": "N/A"
 }"""
 
-    prompt = f"""あなたはSMCトレードの補助監視AIです。
-この判定は『補助』です。最終判断はシステム側の機械判定が優先されます。
+    prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+複雑な数値計算・相場予測は不要です。システムの機械判定の補助として、視覚パターンのみを確認してください。
 
 【重要】
-- 無効化ラインの終値ブレイク判定はシステム側で実施済みです。
-- あなたは赤線ブレイク可否を判定しないでください。
+- 無効化ライン（赤い太線）の終値ブレイク判定はシステム側で実施済みです。
 - invalidation_breached は必ず false を返してください。
+- HOLDに倒すことを優先してください。明確なシグナルのみEXITを返してください。
 
-【ポジション情報】
-- symbol: {symbol}
-- direction: {direction}
-- entry: {entry_price}
-- current: {current_price}
-- pnl_jpy: {unrealized_pnl:,.0f}
-- hold_min: {safe_hold_minutes}
-- tp: {tp_price if tp_price is not None else 'N/A'}
-- sl: {current_sl if current_sl is not None else 'N/A'}
-- invalidation_line: {inv_text}
-
-【entry rationale】
-{entry_reasoning[:300] if entry_reasoning else 'N/A'}
+【ポジション情報 (Python計算済み)】
+- symbol: {symbol} / direction: {direction}
+- entry: {entry_price} / current: {current_price} / pnl_jpy: {unrealized_pnl:,.0f}
+- hold_min: {safe_hold_minutes} / phase: {phase}
+- tp: {tp_text} (チャート上の緑点線) / sl: {sl_text} / inv: {inv_text}
+- TP到達率: {tp_progress_pct:.0f}%
 
 {task_section}"""
 
@@ -483,32 +415,17 @@ def _apply_entry_signal_guards(signal: EntrySignal, mech_gate: dict | None = Non
     if signal.decision not in {"BUY", "SELL"}:
         return signal
 
-    skip_reasons: list[str] = []
     entry_type = mech_gate.get("entry_type") if mech_gate else None
     mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
-
-    # Sweep方向とAI報告方向の矛盾 (Pythonが確定した方向とAIの報告が食い違う場合)
-    if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"} and signal.smc_sweep_direction != mech_sweep_type:
-        skip_reasons.append("sweep_direction_mismatch")
 
     # Sweep方向とエントリー方向の矛盾 (HIGH sweep→SELL / LOW sweep→BUY のみ有効)
     if entry_type == "REVERSAL_SWEEP" and mech_sweep_type in {"HIGH", "LOW"}:
         expected_dir = "SELL" if mech_sweep_type == "HIGH" else "BUY"
         if signal.decision != expected_dir:
-            skip_reasons.append(f"reversal_direction_wrong(sweep={mech_sweep_type},expected={expected_dir},got={signal.decision})")
+            guard_note = f"Entry guard forced SKIP: reversal_direction_wrong(sweep={mech_sweep_type},expected={expected_dir},got={signal.decision})"
+            signal.decision = "SKIP"
+            signal.reasoning = (f"{guard_note}. {signal.reasoning}").strip(". ")
 
-    if not skip_reasons:
-        return signal
-
-    guard_note = "Entry guard forced SKIP: " + ", ".join(skip_reasons)
-    reasoning = signal.reasoning.strip()
-    if reasoning:
-        reasoning = f"{guard_note}. {reasoning}"
-    else:
-        reasoning = guard_note
-
-    signal.decision = "SKIP"
-    signal.reasoning = reasoning
     return signal
 
 
@@ -517,46 +434,28 @@ def _run_entry_final_approval(symbol: str, current_price: float,
                               balance: float, h1_b64: str, m15_b64: str,
                               primary_signal: EntrySignal,
                               smc_data: dict | None = None) -> EntrySignal:
-    prompt = f"""あなたは最終承認を担当するシニアSMCアナリストです。
+    prompt = f"""あなたは最終承認を担当するシニアビジュアルアナリストです。
 一次判定モデルが {symbol} の {primary_signal.decision} を提案しています。
-チャート画像（BOS/CHoCH/OB/FVG/Liquidity描画済み）を独立して再評価し、承認可否を判断してください。
+チャート画像を独立して再評価し、承認可否を判断してください。
 
 【一次判定サマリー】
 - decision: {primary_signal.decision} / confidence: {primary_signal.confidence}
-- h1_trend: {primary_signal.h1_trend} / alignment: {primary_signal.alignment}
-- smc_liquidity_sweep: {primary_signal.smc_liquidity_sweep} ({primary_signal.smc_sweep_direction})
-- smc_ob_confirmed: {primary_signal.smc_ob_confirmed} / smc_fvg_present: {primary_signal.smc_fvg_present}
+- visual_check: {primary_signal.m15_signal_visual_check[:200]}
 - reasoning: {primary_signal.reasoning[:300]}
-- sl_distance: {primary_signal.sl_distance} / tp_distance: {primary_signal.tp_distance}
 - 現在価格: {current_price} / M15 ATR: {atr_m15:.5f} / H1 ATR: {atr_h1:.5f}
 
-【alignmentルール】
-  h1_trend="UP"+decision="SELL" → alignment=false (上昇トレンド中のSELL = 不一致)
-  h1_trend="DOWN"+decision="BUY" → alignment=false (下降トレンド中のBUY = 不一致)
-  逆張りSweep (REVERSAL_SWEEP) では alignment=false でも承認可能。
-  一次判定のalignment値を継承し、現状を正確に反映してください。
-
 【承認チェック (すべてYESでのみ承認)】
-  ① チャート上でLiquidity Sweepが本物か (ヒゲタッチだけでなく明確な侵食か)
-  ② Sweep後のBOS/反転アクションが明確か
-  ③ SLがSweep起点の外側に置けてリスクが限定されているか
+  ① Sweep/反転パターンがチャート上で本物か (ヒゲタッチだけでなく明確な侵食か)
+  ② 反転方向への明確なプライスアクション（包み足/大ローソク）が確認できるか
+  ③ エントリー方向に価格が伸びるスペース（空間的ゆとり）があるか
   → 1つでも疑わしければ SKIP
 
 【JSONのみで回答】
 {{
     "decision": "{primary_signal.decision}" or "SKIP",
     "confidence": 0-100,
-    "h1_trend": "UP" or "DOWN" or "SIDEWAYS",
-    "m15_signal": "短期構造の要約",
-    "alignment": true or false,
-    "smc_liquidity_sweep": true or false,
-    "smc_sweep_direction": "HIGH" or "LOW" or "NONE",
-    "smc_ob_confirmed": true or false,
-    "smc_fvg_present": true or false,
-    "reasoning": "承認/否決の理由",
-    "news_impact": "ニュース評価",
-    "tp_distance": 数値,
-    "invalidation_price": SMC構造崩壊の無効化ライン価格(数値)。Sweepされた流動性レベル自体。M15確定足の終値がこの価格を割った(BUY)/超えた(SELL)場合にシステムが強制EXIT
+    "m15_signal_visual_check": "視覚的確認の説明",
+    "reasoning": "承認/否決の理由"
 }}"""
 
     try:
@@ -583,7 +482,7 @@ def _run_entry_final_approval(symbol: str, current_price: float,
         )
 
         raw_text = response.output_text
-        final_signal = _parse_entry_response(raw_text, atr_m15)
+        final_signal = _parse_entry_response(raw_text)
         final_signal.raw_response = primary_signal.raw_response + "\n\n--- FINAL APPROVAL ---\n\n" + raw_text
         final_signal.approved_by_final_model = final_signal.decision in {"BUY", "SELL"}
         final_signal.final_model_name = config.OPENAI_FINAL_APPROVAL_MODEL
@@ -593,15 +492,9 @@ def _run_entry_final_approval(symbol: str, current_price: float,
         return EntrySignal(
             decision="SKIP",
             confidence=0,
-            h1_trend=primary_signal.h1_trend,
-            m15_signal=primary_signal.m15_signal,
-            alignment=False,
+            m15_signal_visual_check=primary_signal.m15_signal_visual_check,
             reasoning=f"Final approval failed: {e}",
-            news_impact=primary_signal.news_impact,
-            sl_distance=primary_signal.sl_distance,
-            tp_distance=primary_signal.tp_distance,
             raw_response=primary_signal.raw_response + "\n\n--- FINAL APPROVAL ERROR ---\n\n" + str(e),
-            smc_liquidity_sweep=False,
             approved_by_final_model=False,
             final_model_name=config.OPENAI_FINAL_APPROVAL_MODEL,
         )
@@ -623,48 +516,24 @@ def _parse_bool(value, default: bool = False) -> bool:
             return False
     return default
 
-def _parse_entry_response(raw_text: str, fallback_atr: float) -> EntrySignal:
+def _parse_entry_response(raw_text: str) -> EntrySignal:
     """AIレスポンスからJSONを抽出してEntrySignalに変換"""
     data = _extract_json(raw_text)
     if data is None:
         logger.warning("EntryレスポンスのJSON解析失敗 → SKIP")
         return EntrySignal(
             decision="SKIP", confidence=0,
-            h1_trend="UNKNOWN", m15_signal="JSON parse error",
-            alignment=False, reasoning=raw_text[:300],
-            news_impact="", sl_distance=fallback_atr * 1.5,
-            tp_distance=fallback_atr * 1.8,
+            m15_signal_visual_check="JSON parse error",
+            reasoning=raw_text[:300],
             raw_response=raw_text,
-            smc_liquidity_sweep=False,
         )
-
-    _sl_raw = data.get("sl_distance")
-    sl_distance = float(_sl_raw) if _sl_raw is not None else fallback_atr * 1.5
-    if sl_distance <= 0:
-        sl_distance = fallback_atr * 1.5
-
-    _tp_raw = data.get("tp_distance")
-    tp_distance = float(_tp_raw) if _tp_raw is not None else sl_distance * config.ENTRY_TP_R
-    min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
-    if tp_distance < min_tp_distance:
-        tp_distance = min_tp_distance
 
     return EntrySignal(
         decision=data.get("decision", "SKIP").upper(),
         confidence=int(data.get("confidence", 0)),
-        h1_trend=data.get("h1_trend", "UNKNOWN").upper(),
-        m15_signal=data.get("m15_signal", ""),
-        alignment=_parse_bool(data.get("alignment", False), default=False),
+        m15_signal_visual_check=data.get("m15_signal_visual_check", ""),
         reasoning=data.get("reasoning", ""),
-        news_impact=data.get("news_impact", ""),
-        sl_distance=sl_distance,
-        tp_distance=tp_distance,
         raw_response=raw_text,
-        smc_liquidity_sweep=_parse_bool(data.get("smc_liquidity_sweep", False), default=False),
-        smc_sweep_direction=str(data.get("smc_sweep_direction", "NONE")).upper(),
-        smc_ob_confirmed=_parse_bool(data.get("smc_ob_confirmed", False), default=False),
-        smc_fvg_present=_parse_bool(data.get("smc_fvg_present", False), default=False),
-        invalidation_price=float(data["invalidation_price"]) if data.get("invalidation_price") is not None else None,
     )
 
 

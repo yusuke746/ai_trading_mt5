@@ -228,8 +228,15 @@ def _mechanical_smc_gate(
     atr_h1: float,
     smc_data: dict,
     current_price: float,
+    symbol: str = "",
 ) -> tuple[bool, bool, bool, str, str, float | None, float | None]:
     """H1データのみでSMC条件を数値判定する機械ゲート。AI呼び出し前のコスト削減フィルタ。
+
+    Sweep判定条件 (4つすべて満たす場合のみSweep=True):
+      1. 侵食深さ: ATR×min ≤ 侵食 < ATR×max (銘柄別に緩和)
+      2. 終値リジェクション: 侵食足の確定足終値がレベル内側に戻る
+      3. ヒゲ割合: 侵食側のヒゲ≥ Total Rangeの50% (ピンバー要件)
+      4. ボラティリティフィルター: 現在ATR ≥ ATR SMA50 (閑散相場排除)
 
         Returns: (sweep_pass, bos_pass, rr_pass, sweep_type, entry_type, swept_level, structural_sl_dist)
       sweep_type: "HIGH" / "LOW" / "NONE"
@@ -265,7 +272,26 @@ def _mechanical_smc_gate(
     if not levels:
         return False, False, False, "NONE", "NONE", None, None
 
+    # ── Sweep判定パラメータ (銘柄別側面侵食上限) ─────────────────────────────────
+    _sym_key = str(symbol).rstrip("#.").upper()
     min_penetration = atr_h1 * config.SMC_SWEEP_ATR_MULT
+    _max_mult = config.SMC_SWEEP_MAX_ATR_MULT_BY_SYMBOL.get(_sym_key, config.SMC_SWEEP_MAX_ATR_MULT)
+    max_penetration = atr_h1 * _max_mult
+    min_wick_ratio  = config.SMC_SWEEP_MIN_WICK_RATIO
+
+    # ── ボラティリティフィルター (閑散相場排除) ──────────────────────────────────────
+    _vol_filter_ok = True
+    if config.SMC_SWEEP_VOLATILITY_FILTER_ENABLED:
+        _atr_sma = mt5_connector.calculate_atr_sma(
+            df_h1, config.ATR_PERIOD, config.SMC_SWEEP_ATR_SMA_PERIOD
+        )
+        if _atr_sma is not None and atr_h1 < _atr_sma:
+            logger.debug(
+                "[MechGate] %s: ボラ不足 (ATR=%.5f < ATR_SMA%d=%.5f) → Sweep検索スキップ",
+                symbol, atr_h1, config.SMC_SWEEP_ATR_SMA_PERIOD, _atr_sma,
+            )
+            _vol_filter_ok = False
+
     lookback = min(config.SMC_SWEEP_LOOKBACK_BARS, len(df_h1) - 1)
     recent = df_h1.iloc[-lookback:]
 
@@ -273,22 +299,41 @@ def _mechanical_smc_gate(
     sweep_type = "NONE"
     swept_level: float | None = None
 
-    for level in levels:
-        for _, bar in recent.iloc[::-1].iterrows():  # 最新バーから逆順に検索（最新スイープを優先）
-            # 高値Sweep: レベル上にATR*mult以上侵食してレベル下でクローズ
-            if bar["high"] > level + min_penetration and bar["close"] < level:
-                sweep_pass = True
-                sweep_type = "HIGH"
-                swept_level = level
+    if _vol_filter_ok:
+        for level in levels:
+            for _, bar in recent.iloc[::-1].iterrows():  # 最新バーから逆順に検索（最新スイープを優先）
+                bar_high  = float(bar["high"])
+                bar_low   = float(bar["low"])
+                bar_open  = float(bar["open"])
+                bar_close = float(bar["close"])
+                total_range = bar_high - bar_low
+                if total_range <= 0:
+                    continue
+
+                # ── HIGH Sweep ──
+                pen_high = bar_high - level
+                if min_penetration <= pen_high < max_penetration and bar_close < level:
+                    # ヒゲ割合: 上ヒゲ = high - max(open, close)
+                    upper_wick = bar_high - max(bar_open, bar_close)
+                    if upper_wick / total_range >= min_wick_ratio:
+                        sweep_pass = True
+                        sweep_type = "HIGH"
+                        swept_level = level
+                        break
+
+                # ── LOW Sweep ──
+                pen_low = level - bar_low
+                if min_penetration <= pen_low < max_penetration and bar_close > level:
+                    # ヒゲ割合: 下ヒゲ = min(open, close) - low
+                    lower_wick = min(bar_open, bar_close) - bar_low
+                    if lower_wick / total_range >= min_wick_ratio:
+                        sweep_pass = True
+                        sweep_type = "LOW"
+                        swept_level = level
+                        break
+
+            if sweep_pass:
                 break
-            # 安値Sweep: レベル下にATR*mult以上侵食してレベル上でクローズ
-            if bar["low"] < level - min_penetration and bar["close"] > level:
-                sweep_pass = True
-                sweep_type = "LOW"
-                swept_level = level
-                break
-        if sweep_pass:
-            break
 
     # ── Reversal: BOS + RR判定 ──────────────────────────────
     bos_pass = False
@@ -608,7 +653,7 @@ def _check_entry(symbol: str):
 
     # 機械的SMCゲート (逆張り/順張り両対応)
     smc_sweep_pass, smc_bos_pass, smc_rr_pass, mech_sweep_type, mech_entry_type, mech_swept_level, mech_structural_sl_dist = _mechanical_smc_gate(
-        df_h1, atr_h1, smc_data, current_price
+        df_h1, atr_h1, smc_data, current_price, symbol=symbol
     )
     logger.info(
         "[Entry] %s: MechGate sweep=%s bos=%s rr=%s type=%s entry_type=%s",
@@ -683,12 +728,26 @@ def _check_entry(symbol: str):
             )
             return
 
+    # H1トレンド方向を算出 (M15チャート背景色用)
+    try:
+        _ma_h1 = df_h1["close"].rolling(config.MA_PERIOD).mean().dropna()
+        _lookback = config.SMC_CONTINUATION_BOS_LOOKBACK_BARS
+        if len(_ma_h1) >= _lookback + 1:
+            _slope = float(_ma_h1.iloc[-1]) - float(_ma_h1.iloc[-(_lookback + 1)])
+            _thresh = atr_h1 * config.SMC_CONTINUATION_MA_SLOPE_ATR_MULT
+            h1_trend_for_chart = "UP" if _slope >= _thresh else ("DOWN" if _slope <= -_thresh else "SIDEWAYS")
+        else:
+            h1_trend_for_chart = "SIDEWAYS"
+    except Exception:
+        h1_trend_for_chart = "SIDEWAYS"
+
     # SMCオーバーレイ付きチャート画像生成
     h1_b64, m15_b64 = chart_capture.generate_smc_chart_pair_base64(
         symbol=symbol,
         smc_features=smc_data,
         swept_level=mech_swept_level,
         swept_type=mech_sweep_type,
+        h1_trend=h1_trend_for_chart,
     )
     if h1_b64 is None or m15_b64 is None:
         logger.warning("[Entry] %s: チャート画像生成失敗", symbol)
@@ -732,50 +791,47 @@ def _check_entry(symbol: str):
     # 判定
     if signal.decision == "SKIP":
         logger.info(
-            "[Entry] %s: AI判断 SKIP (conf=%d align=%s h1=%s smc_sweep=%s smc_dir=%s ob=%s fvg=%s reason=%s)",
-            symbol,
-            signal.confidence,
-            signal.alignment,
-            signal.h1_trend,
-            signal.smc_liquidity_sweep,
-            signal.smc_sweep_direction,
-            signal.smc_ob_confirmed,
-            signal.smc_fvg_present,
+            "[Entry] %s: AI判断 SKIP (conf=%d entry_type=%s visual=%s reason=%s)",
+            symbol, signal.confidence, mech_entry_type,
+            (signal.m15_signal_visual_check or "")[:100],
             (signal.reasoning or "")[:180].replace("\n", " "),
         )
         return
 
-    if not signal.alignment and mech_entry_type != "REVERSAL_SWEEP":
-        logger.info("[Entry] %s: H1/M15トレンド不一致 → スキップ", symbol)
-        return
+    # アライメントチェック: CONTINUATION_BOSのみPython側で判定
+    if mech_entry_type != "REVERSAL_SWEEP":
+        _py_alignment = (
+            (signal.decision == "BUY" and h1_trend_for_chart == "UP")
+            or (signal.decision == "SELL" and h1_trend_for_chart == "DOWN")
+        )
+        if not _py_alignment:
+            logger.info(
+                "[Entry] %s: H1/M15トレンド不一致 (h1=%s dir=%s) → スキップ",
+                symbol, h1_trend_for_chart, signal.decision,
+            )
+            return
 
-    conf_threshold = adaptive_params.get_confidence_threshold(signal.h1_trend, mech_entry_type)
+    conf_threshold = adaptive_params.get_confidence_threshold(h1_trend_for_chart, mech_entry_type)
     if signal.confidence < conf_threshold:
         logger.info(
             "[Entry] %s: 信頼度不足 %d < %d (adaptive, entry_type=%s, h1=%s) → スキップ",
-            symbol, signal.confidence, conf_threshold, mech_entry_type, signal.h1_trend,
+            symbol, signal.confidence, conf_threshold, mech_entry_type, h1_trend_for_chart,
         )
         return
 
-    # SMCフィルタ: エントリータイプに応じた必須条件チェック
+    # SMCフィルタ: 機械ゲートの確認結果を使用 (AIからは取得しない)
     if config.SMC_FILTER_ENABLED:
-        if mech_entry_type == "REVERSAL_SWEEP" and not signal.smc_liquidity_sweep:
-            logger.info(
-                "[Entry] %s: SMCフィルタ(逆張り) → Liquidity Sweep未確認 → スキップ (smc_sweep=%s)",
-                symbol, signal.smc_sweep_direction,
-            )
+        if mech_entry_type == "REVERSAL_SWEEP" and not smc_sweep_pass:
+            logger.info("[Entry] %s: SMCフィルタ(逆張り) → Sweep未確認 → スキップ", symbol)
             return
-        elif mech_entry_type == "CONTINUATION_BOS" and not signal.smc_ob_confirmed:
-            logger.info(
-                "[Entry] %s: SMCフィルタ(順張り) → OB/FVG未確認 → スキップ",
-                symbol,
-            )
+        elif mech_entry_type == "CONTINUATION_BOS" and not smc_bos_pass:
+            logger.info("[Entry] %s: SMCフィルタ(順張り) → BOS未確認 → スキップ", symbol)
             return
 
     logger.info(
-        "[Entry] %s: SMC sweep=%s dir=%s OB=%s FVG=%s",
-        symbol, signal.smc_liquidity_sweep, signal.smc_sweep_direction,
-        signal.smc_ob_confirmed, signal.smc_fvg_present,
+        "[Entry] %s: AI visual conf=%d entry_type=%s sweep=%s visual=%s",
+        symbol, signal.confidence, mech_entry_type, mech_sweep_type,
+        (signal.m15_signal_visual_check or "")[:100],
     )
 
     # ── 発注処理 ──
@@ -976,10 +1032,58 @@ def _check_entry(symbol: str):
         )
         lot = scaled_lot
 
-    tp_distance = signal.tp_distance
+    # ── Python側構造TP計算 (AI tp_distanceは比較参照のみ、Python構造レベル優先) ──
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
+    ideal_tp_distance = sl_distance * config.ENTRY_TP_R
+
+    # 構造レベルを収集 (機械ゲートと同じセット: pdh/pdl/pwh/pwl + swing + eq + FVG中心)
+    _tp_levels: list[float] = []
+    if smc_data:
+        for _key in ("pdh", "pdl", "pwh", "pwl"):
+            _v = smc_data.get(_key)
+            if _v:
+                _tp_levels.append(float(_v))
+        for _v in smc_data.get("swing_highs", []):
+            _tp_levels.append(float(_v))
+        for _v in smc_data.get("swing_lows", []):
+            _tp_levels.append(float(_v))
+        for _v in smc_data.get("eq_highs", []):
+            try:
+                _tp_levels.append(float(_v))
+            except (TypeError, ValueError):
+                pass
+        for _v in smc_data.get("eq_lows", []):
+            try:
+                _tp_levels.append(float(_v))
+            except (TypeError, ValueError):
+                pass
+        for _z in smc_data.get("fvg_zones", []):
+            try:
+                _tp_levels.append((float(_z["high"]) + float(_z["low"])) / 2)
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    # 利益方向の最近接構造レベルをTPに設定
+    tp_distance = ideal_tp_distance  # fallback
+    _tp_source = "ideal_rr"
+    if direction == "BUY":
+        _candidates = sorted([v for v in _tp_levels if v > entry_price + min_tp_distance])
+        if _candidates:
+            tp_distance = _candidates[0] - entry_price
+            _tp_source = "structural"
+    else:
+        _candidates = sorted(
+            [v for v in _tp_levels if v < entry_price - min_tp_distance],
+            reverse=True,
+        )
+        if _candidates:
+            tp_distance = entry_price - _candidates[0]
+            _tp_source = "structural"
+
+    # 最小RR保証
     if tp_distance < min_tp_distance:
         tp_distance = min_tp_distance
+        _tp_source = "min_rr_floor"
 
     if direction == "BUY":
         tp_price = round(entry_price + tp_distance, digits)
@@ -987,11 +1091,8 @@ def _check_entry(symbol: str):
         tp_price = round(entry_price - tp_distance, digits)
 
     logger.info(
-        "[EntryMonitor] %s: tp_dist=%.5f min_tp=%.5f tp=%.5f",
-        symbol,
-        tp_distance,
-        min_tp_distance,
-        tp_price,
+        "[EntryMonitor] %s: tp_dist=%.5f tp=%.5f (source=%s min_tp=%.5f ideal_tp=%.5f)",
+        symbol, tp_distance, tp_price, _tp_source, min_tp_distance, ideal_tp_distance,
     )
 
     # 発注
@@ -1004,26 +1105,27 @@ def _check_entry(symbol: str):
 
     # DB記録
     smc_summary = (
-        f"[SMC] entry_type={mech_entry_type} sweep={signal.smc_liquidity_sweep} "
-        f"dir={signal.smc_sweep_direction} OB={signal.smc_ob_confirmed} FVG={signal.smc_fvg_present}\n"
+        f"[SMC] entry_type={mech_entry_type} sweep={smc_sweep_pass} "
+        f"dir={mech_sweep_type} h1_trend={h1_trend_for_chart}\n"
         f"[MechGate] sweep={smc_sweep_pass} bos={smc_bos_pass} rr={smc_rr_pass} type={mech_sweep_type}\n"
+        f"[Visual] {(signal.m15_signal_visual_check or '')[:200]}\n"
     )
     trade_logger.insert_trade(
         symbol=symbol, direction=direction, entry_price=entry_price,
         lot_size=lot, sl_price=sl_price, tp_price=tp_price,
         ai_reasoning=(smc_summary + signal.reasoning)[:1000],
-        news_summary=signal.news_impact[:500],
+        news_summary="",
         mt5_ticket=ticket,
         smc_sweep_pass=smc_sweep_pass,
         smc_bos_pass=smc_bos_pass,
         smc_rr_pass=smc_rr_pass,
         ai_confidence=signal.confidence,
-        ai_smc_sweep=signal.smc_liquidity_sweep,
-        ai_smc_ob=signal.smc_ob_confirmed,
-        ai_smc_fvg=signal.smc_fvg_present,
+        ai_smc_sweep=smc_sweep_pass,
+        ai_smc_ob=smc_bos_pass,
+        ai_smc_fvg=False,
         entry_type=mech_entry_type,
-        market_regime=signal.h1_trend,
-        invalidation_price=signal.invalidation_price,
+        market_regime=h1_trend_for_chart,
+        invalidation_price=None,
     )
 
     # Discord通知
@@ -1204,11 +1306,13 @@ def _check_single_exit(pos: dict):
     except Exception:
         exit_smc = None
 
-    # SMCオーバーレイ付きチャートを生成（invalidation_price があれば赤線入り）
+    # SMCオーバーレイ付きチャートを生成（invalidation_price: 赤線、tp_price: 緑点線）
+    _exit_tp_price = trade.get("tp_price") if trade else pos.get("tp")
     exit_img_b64 = chart_capture.generate_smc_chart_base64(
         symbol, config.EXIT_MONITOR_TF,
         smc_features=exit_smc,
         invalidation_price=invalidation_price,
+        tp_price=_exit_tp_price,
     )
     import base64 as _b64
     exit_img = _b64.b64decode(exit_img_b64) if exit_img_b64 else None
@@ -1293,9 +1397,36 @@ def _check_single_exit(pos: dict):
         return
 
     # EXIT判定（AI中心）
-    required_conf = config.EXIT_MIN_CONFIDENCE
+    # フェーズ別の信頼度閾値:
+    #   NEAR_TP   : 75% → 積極的にEXIT (利確逃しを防ぐ)
+    #   LONG_HOLD : 60% → MA逆転確認済みなら中程度で許容
+    #   NORMAL    : 75% → 不明確な場合はHOLDを優先
+    _exit_phase = signal.reasoning  # reasoning にフェーズ情報は含まれないので別途判定
     if hold_minutes < config.EXIT_EARLY_WINDOW_MINUTES:
-        required_conf = max(required_conf, config.EXIT_MIN_CONFIDENCE_EARLY)
+        required_conf = config.EXIT_MIN_CONFIDENCE_EARLY   # 早期: 65
+    else:
+        # tp_progress_pct はシグナルに含まれないため、再計算
+        _trade_tp = (trade.get("tp_price") if trade else None) or pos.get("tp")
+        _ep = pos.get("price_open", 0)
+        _cp = pos.get("price_current", 0)
+        if _trade_tp and _ep and _trade_tp != _ep:
+            _tp_prog = min(100.0, abs(_cp - _ep) / abs(_trade_tp - _ep) * 100.0)
+        else:
+            _tp_prog = 0.0
+        _hold_phase = (
+            "NEAR_TP"    if _tp_prog >= 75.0                          else
+            "LONG_HOLD"  if hold_minutes >= 250                       else
+            "NORMAL"
+        )
+        required_conf = {
+            "NEAR_TP":   55,   # TP目前: 低めでもEXIT許容 (利確逃し防止)
+            "LONG_HOLD": 60,   # 長時間: 中程度
+            "NORMAL":    75,   # 通常: 高閾値でHOLD優先
+        }[_hold_phase]
+        logger.info(
+            "[Exit] %s ticket=%s: phase=%s tp_prog=%.0f%% required_conf=%d",
+            symbol, ticket, _hold_phase, _tp_prog, required_conf,
+        )
 
     if signal.decision == "EXIT" and signal.confidence >= required_conf:
         _execute_exit(pos, signal.reasoning, action_type="EXIT_CHECK")

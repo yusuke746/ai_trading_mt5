@@ -107,6 +107,8 @@ def generate_smc_chart_base64(
     bars: int = config.CHART_BARS,
     swept_level: float | None = None,
     swept_type: str | None = None,
+    h1_trend: str = "SIDEWAYS",
+    tp_price: float | None = None,
 ) -> str | None:
     """SMC特徴量をオーバーレイしたローソク足チャートを生成し、base64文字列で返す。
 
@@ -154,6 +156,10 @@ def generate_smc_chart_base64(
 
     smc = smc_features or {}
     current_close = float(ohlc["Close"].iloc[-1])
+
+    # ATR (Liquidityゾーン幅・タイトル用)
+    atr_val = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
+    _liq_zone_h = max(atr_val * 0.10, 1e-6)  # Liquidityゾーン帯幅
 
     # H1チャートにはH1ベースのOBゾーンを使用、M15チャートにはM15ベースを使用
     if timeframe == config.TREND_TF:  # H1
@@ -203,142 +209,72 @@ def generate_smc_chart_base64(
 
     fig_size = (config.CHART_WIDTH / 100, config.CHART_HEIGHT / 100)
 
-    # ── hlines (水平線) 引数構築 ──
+    # ── hlines: BOS/CHoCH (テキストラベルなし) + SWEEP + INV ──
     hlines_prices: list[float] = []
     hlines_colors: list[str] = []
     hlines_styles: list[str] = []
     hlines_widths: list[float] = []
-    # 主要ラインの右端ラベル用 (price, label, color)
-    line_labels: list[tuple[float, str, str]] = []
 
     # BOS: 青の実線
     for lvl in bos_levels:
-        hlines_prices.append(float(lvl))
-        hlines_colors.append("dodgerblue")
-        hlines_styles.append("solid")
-        hlines_widths.append(1.2)
+        try:
+            f = float(lvl)
+            if _draw_lo <= f <= _draw_hi:
+                hlines_prices.append(f)
+                hlines_colors.append("dodgerblue")
+                hlines_styles.append("solid")
+                hlines_widths.append(1.5)
+        except (TypeError, ValueError):
+            pass
 
     # CHoCH (H1): オレンジの破線
     for lvl in choch_levels:
-        hlines_prices.append(float(lvl))
-        hlines_colors.append("darkorange")
-        hlines_styles.append("dashed")
-        hlines_widths.append(1.2)
-
-    # BOS/CHoCH 右端ラベル: TradingView準拠で線上に直接表示
-    for lvl in bos_levels:
-        try:
-            line_labels.append((float(lvl), "BOS", "dodgerblue"))
-        except (TypeError, ValueError):
-            pass
-    for lvl in choch_levels:
-        try:
-            line_labels.append((float(lvl), "CHoCH", "darkorange"))
-        except (TypeError, ValueError):
-            pass
-
-    # CHoCH (M15): mplfinanceのhlines validatorはタプル形式linestyleを受け付けないため
-    # post-plotのax.axhline()で別途描画する（_m15_choch_draw_levels に収集）
-    _m15_choch_draw_levels: list[float] = []
-    for lvl in smc.get("m15_choch_levels", []):
-        try:
-            _m15_choch_draw_levels.append(float(lvl))
-        except (TypeError, ValueError):
-            pass
-
-    # Buy-side Liquidity: 現在価格より「上」にあるスウィング高値のみ
-    # (価格に上抜かれた高値は流動性が消費済みなので描画しない)
-    for lvl in _pick_near_levels(
-        [l for l in smc.get("buy_liquidity", []) if float(l) > current_close],
-        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
-    ):
-        hlines_prices.append(float(lvl))
-        hlines_colors.append("deepskyblue")
-        hlines_styles.append("dotted")
-        hlines_widths.append(1.0)
-
-    # Sell-side Liquidity: 現在価格より「下」にあるスウィング安値のみ
-    # (価格に下抜かれた安値は流動性が消費済みなので描画しない)
-    for lvl in _pick_near_levels(
-        [l for l in smc.get("sell_liquidity", []) if float(l) < current_close],
-        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
-    ):
-        hlines_prices.append(float(lvl))
-        hlines_colors.append("firebrick")
-        hlines_styles.append("dotted")
-        hlines_widths.append(1.0)
-
-    # PDH/PDL/PWH/PWL (get_price_levels互換)
-    for key, color in [("pdh", "gold"), ("pdl", "gold"), ("pwh", "orchid"), ("pwl", "orchid")]:
-        val = smc.get(key)
-        if val is not None:
-            hlines_prices.append(float(val))
-            hlines_colors.append(color)
-            hlines_styles.append("dashed")
-            hlines_widths.append(1.0)
-            line_labels.append((float(val), key.upper(), color))
-
-    # Equal Highs: 現在価格より「上」にあるクラスターのみ（Sweep前の有効な流動性プール）
-    for lvl in smc.get("eq_highs", []):
         try:
             f = float(lvl)
-            if f <= current_close:  # Sweep済み（上抜かれた）EQHは無効
-                continue
-            hlines_prices.append(f)
-            hlines_colors.append("#FFD700")   # Gold
-            hlines_styles.append("dashed")
-            hlines_widths.append(1.8)
-            line_labels.append((f, "EQH", "#FFD700"))
+            if _draw_lo <= f <= _draw_hi:
+                hlines_prices.append(f)
+                hlines_colors.append("darkorange")
+                hlines_styles.append("dashed")
+                hlines_widths.append(1.5)
         except (TypeError, ValueError):
             pass
 
-    # Equal Lows: 現在価格より「下」にあるクラスターのみ（Sweep前の有効な流動性プール）
-    for lvl in smc.get("eq_lows", []):
-        try:
-            f = float(lvl)
-            if f >= current_close:  # Sweep済み（下抜かれた）EQLは無効
-                continue
-            hlines_prices.append(f)
-            hlines_colors.append("#00CED1")   # Dark Turquoise
-            hlines_styles.append("dashed")
-            hlines_widths.append(1.8)
-            line_labels.append((f, "EQL", "#00CED1"))
-        except (TypeError, ValueError):
-            pass
-
-    # スイープされたレベル: 太い点線 (HIGH→赤橙, LOW→青緑)
+    # スイープされたレベル: 太い破線 (HIGH→赤橙, LOW→青緑)
     if swept_level is not None:
-        _sw_color = "#FF6B35" if str(swept_type).upper() == "HIGH" else "#00E676"
-        hlines_prices.append(float(swept_level))
-        hlines_colors.append(_sw_color)
-        hlines_styles.append("dashed")
-        hlines_widths.append(2.0)
-        _sw_label = f"SWEEP({'↑HIGH' if str(swept_type).upper() == 'HIGH' else '↓LOW'})"
-        line_labels.append((float(swept_level), _sw_label, _sw_color))
+        try:
+            _sw_f = float(swept_level)
+            if _draw_lo <= _sw_f <= _draw_hi:
+                _sw_color = "#FF6B35" if str(swept_type).upper() == "HIGH" else "#00E676"
+                hlines_prices.append(_sw_f)
+                hlines_colors.append(_sw_color)
+                hlines_styles.append("dashed")
+                hlines_widths.append(2.5)
+        except (TypeError, ValueError):
+            pass
 
     # 無効化ライン (エグジット用): 太い赤実線
     if invalidation_price is not None:
-        hlines_prices.append(float(invalidation_price))
-        hlines_colors.append("crimson")
-        hlines_styles.append("solid")
-        hlines_widths.append(2.5)
-        line_labels.append((float(invalidation_price), "INV", "crimson"))
+        try:
+            _inv_f = float(invalidation_price)
+            if _draw_lo <= _inv_f <= _draw_hi:
+                hlines_prices.append(_inv_f)
+                hlines_colors.append("crimson")
+                hlines_styles.append("solid")
+                hlines_widths.append(3.0)
+        except (TypeError, ValueError):
+            pass
 
-    # ── 描画範囲外の hline を除去: 遠距離水平線によるY軸圧縮を防ぐ ──
-    if hlines_prices:
-        _kept = [
-            (p, c, s, w)
-            for p, c, s, w in zip(hlines_prices, hlines_colors, hlines_styles, hlines_widths)
-            if _draw_lo <= p <= _draw_hi
-        ]
-        if _kept:
-            hlines_prices[:], hlines_colors[:], hlines_styles[:], hlines_widths[:] = (
-                list(col) for col in zip(*_kept)
-            )
-        else:
-            hlines_prices.clear(); hlines_colors.clear()
-            hlines_styles.clear(); hlines_widths.clear()
-    line_labels = [(p, lbl, c) for p, lbl, c in line_labels if _draw_lo <= p <= _draw_hi]
+    # TP価格 (エグジット用): 緑の点線
+    if tp_price is not None:
+        try:
+            _tp_f = float(tp_price)
+            if _draw_lo <= _tp_f <= _draw_hi:
+                hlines_prices.append(_tp_f)
+                hlines_colors.append("#00E676")
+                hlines_styles.append("dashed")
+                hlines_widths.append(2.0)
+        except (TypeError, ValueError):
+            pass
 
     hlines_cfg = (
         {
@@ -351,9 +287,13 @@ def generate_smc_chart_base64(
         else None
     )
 
-    # ── ATR 表示 ──
-    atr_val = mt5_connector.calculate_atr(df, config.ATR_PERIOD)
-    title_suffix = f"  INV={invalidation_price}" if invalidation_price is not None else ""
+    # ── タイトル ──
+    _title_parts = []
+    if invalidation_price is not None:
+        _title_parts.append(f"INV={invalidation_price}")
+    if tp_price is not None:
+        _title_parts.append(f"TP={tp_price}")
+    title_suffix = "  " + "  ".join(_title_parts) if _title_parts else ""
     title = f"{symbol}  {timeframe}   ATR({config.ATR_PERIOD})={atr_val:.5f}{title_suffix}"
 
     buf = io.BytesIO()
@@ -376,28 +316,80 @@ def generate_smc_chart_base64(
 
     ax_main = axes[0]
 
-    # グリッド: 最小限 (ローソク足を主役に)
+    # グリッド: 最小限
     for ax in axes:
-        ax.grid(True, alpha=0.1, linewidth=0.4, linestyle="-", color="gray")
+        ax.grid(True, alpha=0.08, linewidth=0.3, linestyle="-", color="gray")
 
-    # ラベル右余白: PDH/PDL等テキストが y軸と重ならないよう確保
-    _label_margin = 8  # バー8本分（ラベル密集回避のため余白を広めに）
-    ax_main.set_xlim(right=len(ohlc) - 1 + _label_margin)
-    # Y軸を明示固定 (遠距離hline描画後でもローソク足が画面に収まるよう)
+    ax_main.set_xlim(right=len(ohlc) - 1 + 4)
     ax_main.set_ylim(_draw_lo, _draw_hi)
 
-    # M15 CHoCH: コーラルの一点鎖線 (post-plot描画 — タプルlinestyleはhlines非対応)
-    # M15チャートのみに描画 (H1チャートにM15微細構造は不要)
+    # ── H1トレンド背景色 (M15チャートのみ) ──
     if timeframe != config.TREND_TF:
-        for _lvl in _m15_choch_draw_levels:
-            if _draw_lo <= _lvl <= _draw_hi:
-                ax_main.axhline(_lvl, color="coral", linewidth=1.0, linestyle=(0, (3, 1, 1, 1)), zorder=6, alpha=0.85)
-                ax_main.text(
-                    len(ohlc) - 1 + 0.6, _lvl, "CHoCH",
-                    color="coral", fontsize=6, va="center", ha="left", fontweight="bold",
-                    bbox=dict(facecolor="#1e222d", edgecolor="coral", alpha=0.85, boxstyle="round,pad=0.15"),
-                    zorder=10,
-                )
+        _trend_upper = str(h1_trend).upper()
+        if _trend_upper == "UP":
+            _bg_color = (0.0, 0.5, 0.15, 0.07)
+        elif _trend_upper == "DOWN":
+            _bg_color = (0.8, 0.1, 0.1, 0.07)
+        else:
+            _bg_color = (0.5, 0.5, 0.5, 0.04)
+        ax_main.set_facecolor(_bg_color)
+
+    # ── Liquidityゾーン (半透明帯) ──
+    for lvl in _pick_near_levels(
+        [l for l in smc.get("buy_liquidity", []) if float(l) > current_close],
+        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
+    ):
+        if _draw_lo <= lvl <= _draw_hi:
+            ax_main.axhspan(lvl - _liq_zone_h / 2, lvl + _liq_zone_h / 2,
+                            color="deepskyblue", alpha=0.25, zorder=1)
+
+    for lvl in _pick_near_levels(
+        [l for l in smc.get("sell_liquidity", []) if float(l) < current_close],
+        config.SMC_DRAW_MAX_LIQUIDITY_PER_SIDE,
+    ):
+        if _draw_lo <= lvl <= _draw_hi:
+            ax_main.axhspan(lvl - _liq_zone_h / 2, lvl + _liq_zone_h / 2,
+                            color="firebrick", alpha=0.25, zorder=1)
+
+    # ── PDH/PDL/PWH/PWLゾーン ──
+    for key, _zcolor in [("pdh", "gold"), ("pdl", "gold"), ("pwh", "orchid"), ("pwl", "orchid")]:
+        val = smc.get(key)
+        if val is not None:
+            try:
+                f = float(val)
+                if _draw_lo <= f <= _draw_hi:
+                    ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color=_zcolor, alpha=0.20, zorder=1)
+            except (TypeError, ValueError):
+                pass
+
+    # ── EQHゾーン (現在価格より上) ──
+    for lvl in smc.get("eq_highs", []):
+        try:
+            f = float(lvl)
+            if f > current_close and _draw_lo <= f <= _draw_hi:
+                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="#FFD700", alpha=0.20, zorder=1)
+        except (TypeError, ValueError):
+            pass
+
+    # ── EQLゾーン (現在価格より下) ──
+    for lvl in smc.get("eq_lows", []):
+        try:
+            f = float(lvl)
+            if f < current_close and _draw_lo <= f <= _draw_hi:
+                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="#00CED1", alpha=0.20, zorder=1)
+        except (TypeError, ValueError):
+            pass
+
+    # ── M15 CHoCH: コーラルの一点鎖線 (テキストなし) ──
+    if timeframe != config.TREND_TF:
+        for lvl in smc.get("m15_choch_levels", []):
+            try:
+                _lvl = float(lvl)
+                if _draw_lo <= _lvl <= _draw_hi:
+                    ax_main.axhline(_lvl, color="coral", linewidth=1.2,
+                                    linestyle=(0, (3, 1, 1, 1)), zorder=6, alpha=0.85)
+            except (TypeError, ValueError):
+                pass
 
     # 現在価格ライン: 黄色の点線 + 右端に価格ラベル
     _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
@@ -415,6 +407,27 @@ def generate_smc_chart_base64(
         bbox=dict(facecolor="#1a1a1a", edgecolor="#FFD700", alpha=0.8, boxstyle="round,pad=0.2"),
         zorder=12,
     )
+
+    # TP価格ラベル (チャート範囲内の場合のみ)
+    if tp_price is not None:
+        try:
+            _tp_f = float(tp_price)
+            if _draw_lo <= _tp_f <= _draw_hi:
+                _tp_fmt = f"{_tp_f:.{min(_digits, 5)}f}"
+                ax_main.text(
+                    len(ohlc) - 1 + 0.5,
+                    _tp_f,
+                    f" TP:{_tp_fmt}",
+                    color="#00E676",
+                    fontsize=6.5,
+                    va="center",
+                    ha="left",
+                    fontweight="bold",
+                    bbox=dict(facecolor="#1a1a1a", edgecolor="#00E676", alpha=0.75, boxstyle="round,pad=0.2"),
+                    zorder=12,
+                )
+        except (TypeError, ValueError):
+            pass
 
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     ob_zones: list[dict] = ob_zones_raw
@@ -519,18 +532,6 @@ def generate_smc_chart_base64(
                 linestyle="dashed",
                 zorder=3,
             )
-            label_text = ("★ H.Prob Bull OB" if zone_type == "bull" else "★ H.Prob Bear OB") if is_confluence else ("Bull OB" if zone_type == "bull" else "Bear OB")
-            ax_main.text(
-                (_ob_start_x + box_width) * 0.98,
-                (hi + lo) / 2,
-                label_text,
-                color=(*color, 0.9),
-                fontsize=6,
-                va="center",
-                ha="right",
-                fontweight="bold",
-                zorder=11,
-            )
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("OBゾーン描画スキップ: %s", e)
 
@@ -557,82 +558,41 @@ def generate_smc_chart_base64(
                 zorder=2,
             )
             ax_main.add_patch(rect)
-            ax_main.text(
-                (_fvg_start_x + _fvg_width) * 0.98,
-                (hi + lo) / 2,
-                "FVG",
-                color=(*_SMC_FVG_COLOR, 0.9),
-                fontsize=6,
-                va="center",
-                ha="right",
-                fontweight="bold",
-                zorder=11,
-            )
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
 
-    # ── 主要ライン右端ラベル (PDH/PDL/PWH/PWL/INV/SWEEP) ──
-    # 密集回避: 近接ラベルをY方向にずらす
-    x_right = len(ohlc) - 1
-    _min_label_gap = _price_span * 0.035  # 表示範囲の3.5%以内は「密集」とみなす
-    _used_y: list[float] = []  # 使用済みY位置トラッキング
-    for price, label, color in sorted(line_labels, key=lambda x: x[0]):
-        # 密集チェック: 既存ラベルとの最小距離を確保
-        disp_y = price
-        attempts = 0
-        while any(abs(disp_y - used) < _min_label_gap for used in _used_y) and attempts < 10:
-            disp_y += _min_label_gap * (1 if attempts % 2 == 0 else -1) * ((attempts // 2) + 1)
-            attempts += 1
-        _used_y.append(disp_y)
-        ax_main.text(
-            x_right + 0.6,
-            disp_y,
-            label,
-            color=color,
-            fontsize=7,
-            va="center",
-            ha="left",
-            bbox=dict(facecolor="#1e222d", edgecolor=color, alpha=0.85, boxstyle="round,pad=0.15"),
-            zorder=10,
-        )
-
-    # ── 凡例: タイムフレーム別に必要なエントリのみ ──
+    # ── 凡例: 簡略版 ──
+    _trend_label = {"UP": "H1:UP↑", "DOWN": "H1:DWN↓", "SIDEWAYS": "H1:SIDE"}.get(
+        str(h1_trend).upper(), ""
+    )
     legend_handles = [
-        Line2D([0], [0], color="dodgerblue", lw=1.2, ls="solid",  label="BOS (H1)"),
-        Line2D([0], [0], color="#b2b5be",    lw=1.2, ls="solid",  label="MA20"),
-        Line2D([0], [0], color="darkorange", lw=1.2, ls="dashed", label="CHoCH (H1)"),
+        Line2D([0], [0], color="dodgerblue", lw=1.5, ls="solid",  label="BOS"),
+        Line2D([0], [0], color="darkorange", lw=1.5, ls="dashed", label="CHoCH"),
+        Line2D([0], [0], color="#b2b5be",    lw=1.5, ls="solid",  label="MA20"),
+        mpatches.Patch(facecolor="deepskyblue", alpha=0.25, label="Buy Liq"),
+        mpatches.Patch(facecolor="firebrick",   alpha=0.25, label="Sell Liq"),
+        mpatches.Patch(facecolor=_SMC_BULL_COLOR, alpha=0.25, label="Bull OB"),
+        mpatches.Patch(facecolor=_SMC_BEAR_COLOR, alpha=0.25, label="Bear OB"),
+        mpatches.Patch(facecolor=_SMC_FVG_COLOR,  alpha=0.18, label="FVG"),
+        mpatches.Patch(facecolor="gold", alpha=0.20, label="PDH/PDL"),
     ]
-    # CHoCH (M15) はM15チャートのみ表示 (H1チャートでは描画されない)
-    if timeframe != config.TREND_TF:
-        legend_handles.append(
-            Line2D([0], [0], color="coral", lw=1.0, ls=(0,(3,1,1,1)), label="CHoCH (M15)")
+    if tp_price is not None:
+        legend_handles.append(Line2D([0], [0], color="#00E676", lw=2.0, ls="dashed", label="TP"))
+    if _trend_label and timeframe != config.TREND_TF:
+        _tcolor = {"UP": (0.0, 0.5, 0.15), "DOWN": (0.8, 0.1, 0.1)}.get(
+            str(h1_trend).upper(), (0.5, 0.5, 0.5)
         )
-    legend_handles += [
-        Line2D([0], [0], color="deepskyblue", lw=1.0, ls="dotted", label="Liquidity (Buy-side ↑)"),
-        Line2D([0], [0], color="firebrick", lw=1.0, ls="dotted", label="Liquidity (Sell-side ↓)"),
-        mpatches.Patch(facecolor=_SMC_BULL_COLOR, alpha=0.20, label="OB (Bullish)"),
-        mpatches.Patch(facecolor=_SMC_BEAR_COLOR, alpha=0.20, label="OB (Bearish)"),
-        mpatches.Patch(facecolor=_SMC_CONF_BULL_COLOR, alpha=0.35, label="★ H.Prob OB (H1+M15)"),
-        mpatches.Patch(facecolor=_SMC_FVG_COLOR, alpha=0.18, label="FVG"),
-        Line2D([0], [0], color="gold", lw=1.0, ls="dashed", label="PDH/PDL"),
-        Line2D([0], [0], color="orchid", lw=1.0, ls="dashed", label="PWH/PWL"),
-        Line2D([0], [0], color="#FFD700", lw=1.8, ls="dashed", label="Equal Highs (EQH ↑)"),
-        Line2D([0], [0], color="#00CED1", lw=1.8, ls="dashed", label="Equal Lows (EQL ↓)"),
-    ]
-    if invalidation_price is not None:
-        legend_handles.append(
-            Line2D([0], [0], color="crimson", lw=2.5, ls="solid", label="Invalidation")
-        )
+        legend_handles.insert(0, mpatches.Patch(facecolor=_tcolor, alpha=0.25, label=_trend_label))
     ax_main.legend(
         handles=legend_handles,
         loc="upper left",
         fontsize=6,
-        ncol=2,
-        framealpha=0.80,
+        ncol=3,
+        framealpha=0.75,
         facecolor="#1e222d",
         edgecolor="#434651",
         labelcolor="white",
-        borderpad=0.5,
+        borderpad=0.4,
     )
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")
@@ -650,6 +610,7 @@ def generate_smc_chart_pair_base64(
     invalidation_price: float | None = None,
     swept_level: float | None = None,
     swept_type: str | None = None,
+    h1_trend: str = "SIDEWAYS",
 ) -> tuple[str | None, str | None]:
     """H1 と M15 のSMCオーバーレイ付きチャートをbase64で返す。
 
@@ -657,9 +618,11 @@ def generate_smc_chart_pair_base64(
     エグジット監視時: invalidation_price を指定してM15のみ生成してもよい
     """
     h1_b64 = generate_smc_chart_base64(symbol, config.TREND_TF, smc_features, None,
-                                        swept_level=swept_level, swept_type=swept_type)
+                                        swept_level=swept_level, swept_type=swept_type,
+                                        h1_trend=h1_trend)
     m15_b64 = generate_smc_chart_base64(symbol, config.EXECUTION_TF, smc_features, invalidation_price,
-                                         swept_level=swept_level, swept_type=swept_type)
+                                         swept_level=swept_level, swept_type=swept_type,
+                                         h1_trend=h1_trend)
     return h1_b64, m15_b64
 
 

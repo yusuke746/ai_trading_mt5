@@ -230,6 +230,32 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
     return float(np.mean(tr[-period:]))
 
 
+def calculate_atr_sma(df: pd.DataFrame, atr_period: int = 14, sma_period: int = 50) -> float | None:
+    """ATR(atr_period)のSMA(sma_period)を返す。データ不足時はNone。"""
+    needed = atr_period + sma_period
+    if len(df) < needed:
+        return None
+    high  = df["high"].values
+    low   = df["low"].values
+    close = df["close"].values
+    tr = np.maximum(
+        high[1:] - low[1:],
+        np.maximum(
+            np.abs(high[1:] - close[:-1]),
+            np.abs(low[1:] - close[:-1]),
+        ),
+    )
+    # 各インデックスのATR (単純移動平均)
+    n = len(tr)
+    atr_arr = np.full(n, np.nan)
+    for i in range(atr_period - 1, n):
+        atr_arr[i] = np.mean(tr[i - atr_period + 1: i + 1])
+    valid = atr_arr[~np.isnan(atr_arr)]
+    if len(valid) < sma_period:
+        return None
+    return float(np.mean(valid[-sma_period:]))
+
+
 def calculate_ma(df: pd.DataFrame, period: int = 20) -> pd.Series:
     return df["close"].rolling(window=period).mean()
 

@@ -64,13 +64,8 @@ def main():
                 "status": "OK",
                 "decision": signal.decision,
                 "confidence": signal.confidence,
-                "alignment": signal.alignment,
-                "h1_trend": signal.h1_trend,
-                "m15_signal": signal.m15_signal,
+                "m15_signal_visual_check": signal.m15_signal_visual_check,
                 "reasoning": signal.reasoning,
-                "news_impact": signal.news_impact,
-                "sl_distance": signal.sl_distance,
-                "tp_distance": signal.tp_distance,
                 "raw_response_preview": signal.raw_response[:500],
             }
         )

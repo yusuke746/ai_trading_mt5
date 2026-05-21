@@ -173,8 +173,24 @@ EXIT_TP_NEAR_R_MULT = float(os.getenv("EXIT_TP_NEAR_R_MULT", "0.15"))
 # SMCフィルタを有効にすると、エントリー条件にLiquidity Sweepの確認が追加される
 SMC_FILTER_ENABLED = os.getenv("SMC_FILTER_ENABLED", "true").lower() == "true"
 # Liquidity Sweepと判定するための最小侵食幅 (ATR比率)
-# 例: 0.3 → 高安値をATRの30%以上超えた場合にSweep認定
-SMC_SWEEP_ATR_MULT = float(os.getenv("SMC_SWEEP_ATR_MULT", "0.25"))
+# 例: 0.25 → 高安値をATRの25%以上超えた場合にSweep認定 (浅すぎるノイズを排除)
+SMC_SWEEP_ATR_MULT = float(os.getenv("SMC_SWEEP_ATR_MULT", "0.1"))
+# Sweep侵食深さの上限係数 (深すぎる=ブレイクアウトとして除外)
+# デフォルト: ATR×0.5未満 (USDJPY/EURUSD等ボラ安定銘柄向け)
+SMC_SWEEP_MAX_ATR_MULT = float(os.getenv("SMC_SWEEP_MAX_ATR_MULT", "0.5"))
+# ボラ大銘柄は侵食上限を緩和 (大きなヒゲが出やすいため)
+SMC_SWEEP_MAX_ATR_MULT_BY_SYMBOL: dict = {
+    "GOLD":      1.5,   # GOLD: ボラ大、深いSweepも有効
+    "US100Cash": 1.5,   # US100: 同上
+    "OILCash":   1.2,   # OIL: 中程度に緩和
+}
+# SweepローソクのヒゲがTotal Range(高値〜安値)に占める最低割合
+# 0.50: 上/下ヒゲが足全体の50%以上 = 明確なピンバー要件
+SMC_SWEEP_MIN_WICK_RATIO = float(os.getenv("SMC_SWEEP_MIN_WICK_RATIO", "0.50"))
+# ボラティリティフィルター: 現在ATRをATR SMAと比較するためのSMA期間
+SMC_SWEEP_ATR_SMA_PERIOD = int(os.getenv("SMC_SWEEP_ATR_SMA_PERIOD", "50"))
+# ボラティリティフィルター有効化 (False=閑散相場フィルタ無効)
+SMC_SWEEP_VOLATILITY_FILTER_ENABLED = os.getenv("SMC_SWEEP_VOLATILITY_FILTER_ENABLED", "true").lower() == "true"
 # 機械的SMCゲート: AI呼び出し前に数値条件でフィルタリング
 # Falseにすると機械ゲートをスキップしてAIのみで判断
 SMC_MECHANICAL_GATE_ENABLED = os.getenv("SMC_MECHANICAL_GATE_ENABLED", "true").lower() == "true"
