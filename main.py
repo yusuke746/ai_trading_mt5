@@ -1565,6 +1565,18 @@ def _evaluate_mechanical_exit(
                     "EXIT_TP_NEAR_REVERSAL_MECH",
                 )
 
+    # 4) 長時間停滞タイムアウト: 400分超 + TP進捗 < 40% → 機械EXIT
+    if hold_minutes >= 400 and tp_price is not None:
+        _entry_p = float(pos.get("price_open") or 0)
+        if _entry_p != 0 and tp_price != _entry_p:
+            _tp_prog = min(100.0, abs(current_price - _entry_p) / abs(tp_price - _entry_p) * 100.0)
+            if _tp_prog < 40.0:
+                return (
+                    True,
+                    f"長時間停滞タイムアウト: hold={hold_minutes}min, tp_prog={_tp_prog:.0f}%, entry={_entry_p:.5f}, tp={tp_price:.5f}",
+                    "EXIT_LONG_HOLD_TIMEOUT_MECH",
+                )
+
     return False, "", ""
 
 
@@ -1737,7 +1749,8 @@ def _execute_exit(pos: dict, reasoning: str, action_type: str):
         "EXIT_MARKET_STRESS":       "MARKET_STRESS",
         "EXIT_PREMISE_BREAK_MECH":  "PREMISE_BREAK_MECH",
         "EXIT_TP_HIT_MECH":         "TP_HIT_MECH",
-        "EXIT_TP_NEAR_REVERSAL_MECH": "TP_NEAR_REVERSAL_MECH",
+        "EXIT_TP_NEAR_REVERSAL_MECH":   "TP_NEAR_REVERSAL_MECH",
+        "EXIT_LONG_HOLD_TIMEOUT_MECH":  "LONG_HOLD_TIMEOUT_MECH",
     }
     exit_reason = _ACTION_TO_EXIT_REASON.get(action_type, action_type)
     symbol = pos["symbol"]
