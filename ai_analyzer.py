@@ -313,16 +313,17 @@ TP到達率が {tp_progress_pct:.0f}% です。チャートの緑点線（TP={tp
 ① MA（白い曲線）: 今もエントリー方向（{direction}）に傾いているか？逆方向に曲がっていないか？
 ② 直近ローソク足の流れ: TP方向への動きが継続しているか、それとも横ばい・押し戻しを繰り返しているか？
 
-【HOLD】MAが方向維持、ローソク足がTP方向へ継続
-【EXIT (entry_premise_valid=false)】以下のいずれか:
+【HOLD → entry_premise_valid=true】MAが方向維持、かつローソク足がTP方向へ継続している場合のみ
+【EXIT → entry_premise_valid=false】以下のいずれかに該当する場合（両方ともfalse）:
   ・MAが明確に逆転している（エントリー方向と逆向きに傾いている）
-  ・TP到達率が低くTP方向へ長時間動かない横ばい（TP到達率 {tp_progress_pct:.0f}% かつ停滞）
+  ・TP到達率が{tp_progress_pct:.0f}%以下かつ長時間停滞（TP方向に動く勢いが見えない）
+※EXITを返す場合は必ず entry_premise_valid を false にしてください。
 
 【output JSON only】
 {{
     "decision": "HOLD" or "EXIT",
     "confidence": 0-100,
-    "entry_premise_valid": true or false,
+    "entry_premise_valid": true（HOLD時）or false（EXIT時は必ずfalse）,
     "invalidation_breached": false,
     "reasoning": "MAの向きとローソク足の状態を1文で説明",
     "news_impact": "N/A"
