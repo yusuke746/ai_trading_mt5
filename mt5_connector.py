@@ -260,6 +260,61 @@ def calculate_ma(df: pd.DataFrame, period: int = 20) -> pd.Series:
     return df["close"].rolling(window=period).mean()
 
 
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> float | None:
+    """Wilder's ADX (Average Directional Index) を計算して最新値を返す。
+    データ不足時は None。
+    """
+    needed = period * 3 + 5
+    if len(df) < needed:
+        return None
+
+    high  = df["high"].values.astype(float)
+    low   = df["low"].values.astype(float)
+    close = df["close"].values.astype(float)
+    n = len(high)
+
+    tr  = np.zeros(n)
+    pdm = np.zeros(n)
+    ndm = np.zeros(n)
+    for i in range(1, n):
+        hl = high[i] - low[i]
+        hc = abs(high[i] - close[i - 1])
+        lc = abs(low[i]  - close[i - 1])
+        tr[i]  = max(hl, hc, lc)
+        up = high[i] - high[i - 1]
+        dn = low[i - 1] - low[i]
+        pdm[i] = up if (up > dn and up > 0) else 0.0
+        ndm[i] = dn if (dn > up and dn > 0) else 0.0
+
+    # Wilder's 初期スムージング値 (最初の period 本の合計)
+    atr_s = float(np.sum(tr[1: period + 1]))
+    pdm_s = float(np.sum(pdm[1: period + 1]))
+    ndm_s = float(np.sum(ndm[1: period + 1]))
+
+    dx_vals: list[float] = []
+    for i in range(period + 1, n):
+        atr_s = atr_s - atr_s / period + tr[i]
+        pdm_s = pdm_s - pdm_s / period + pdm[i]
+        ndm_s = ndm_s - ndm_s / period + ndm[i]
+        if atr_s <= 0:
+            dx_vals.append(0.0)
+            continue
+        pdi = 100.0 * pdm_s / atr_s
+        ndi = 100.0 * ndm_s / atr_s
+        denom = pdi + ndi
+        dx_vals.append(100.0 * abs(pdi - ndi) / denom if denom > 0 else 0.0)
+
+    if len(dx_vals) < period:
+        return None
+
+    # ADX初期値: 最初の period 本の DX の平均
+    adx_val = float(np.mean(dx_vals[:period]))
+    for dxi in dx_vals[period:]:
+        adx_val = (adx_val * (period - 1) + dxi) / period
+
+    return float(adx_val) if adx_val > 0 else None
+
+
 # ── SMC 価格レベル計算 ──────────────────
 
 def _detect_swings(df: pd.DataFrame, window: int = 3) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:

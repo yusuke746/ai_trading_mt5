@@ -274,6 +274,18 @@ def _mechanical_smc_gate(
 
     # ── Sweep判定パラメータ (銘柄別側面侵食上限) ─────────────────────────────────
     _sym_key = str(symbol).rstrip("#.").upper()
+
+    # ── ADXフィルター (方向感のない閑散相場をブロック) ──────────────────────────────
+    if config.ADX_FILTER_ENABLED:
+        _adx_threshold = config.ADX_MIN_THRESHOLD_BY_SYMBOL.get(_sym_key, config.ADX_MIN_THRESHOLD)
+        _adx_val = mt5_connector.calculate_adx(df_h1, config.ADX_PERIOD)
+        if _adx_val is not None and _adx_val < _adx_threshold:
+            logger.info(
+                "[MechGate] %s: ADX閑散 (ADX%d=%.1f < %.1f) → 全エントリースキップ",
+                symbol, config.ADX_PERIOD, _adx_val, _adx_threshold,
+            )
+            return False, False, False, "NONE", "NONE", None, None
+
     min_penetration = atr_h1 * config.SMC_SWEEP_ATR_MULT
     _max_mult = config.SMC_SWEEP_MAX_ATR_MULT_BY_SYMBOL.get(_sym_key, config.SMC_SWEEP_MAX_ATR_MULT)
     max_penetration = atr_h1 * _max_mult
@@ -710,7 +722,15 @@ def _check_entry(symbol: str):
         # REVERSAL_SWEEP のトレンド逆行チェック
         # HIGH sweep→SELL が DOWN トレンド順張り、LOW sweep→BUY が UP トレンド順張り
         # それ以外（例: DOWN トレンドで LOW sweep→BUY）は逆張りとして弾く
-        # SIDEWAYS の場合はトレンドが不明確なので通す
+        if mech_entry_type == "REVERSAL_SWEEP" and h1_trend_early == "SIDEWAYS":
+            # SIDEWAYS: トレンドなし局面での逆張りは前提が弱い → スキップ
+            # 分析: SIDEWAYS REVERSAL_SWEEPは8件 WR=25%、-19K損失
+            logger.info(
+                "[Entry] %s: 機械ゲート: REVERSAL_SWEEP + SIDEWAYS (MA傾き不足、逆張り前提なし) → スキップ "
+                "(sweep=%s h1_trend=%s)",
+                symbol, mech_sweep_type, h1_trend_early,
+            )
+            return
         if mech_entry_type == "REVERSAL_SWEEP" and h1_trend_early != "SIDEWAYS":
             _sweep_aligned = (
                 (mech_sweep_type == "HIGH" and h1_trend_early == "DOWN") or
@@ -723,6 +743,15 @@ def _check_entry(symbol: str):
                     symbol, mech_sweep_type, h1_trend_early,
                 )
                 return
+        # REVERSAL_SWEEP + bos_pass=False: MA方向未確認 → スキップ
+        # 分析: bos=False REVERSAL_SWEEPは45件でWR 4.8%、-372K損失
+        if mech_entry_type == "REVERSAL_SWEEP" and not smc_bos_pass:
+            logger.info(
+                "[Entry] %s: 機械ゲート: REVERSAL_SWEEP + bos_pass=False (MA方向未確認) → スキップ "
+                "(sweep=%s h1_trend=%s)",
+                symbol, mech_sweep_type, h1_trend_early,
+            )
+            return
         # RR不足は AI呼び出し前にスキップ (コスト節約)
         # 例外: REVERSAL_SWEEPでbos_pass=TrueなときはAIがTPを精査できるため委任
         if not smc_rr_pass:

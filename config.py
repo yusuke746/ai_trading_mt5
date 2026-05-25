@@ -191,6 +191,19 @@ SMC_SWEEP_MIN_WICK_RATIO = float(os.getenv("SMC_SWEEP_MIN_WICK_RATIO", "0.50"))
 SMC_SWEEP_ATR_SMA_PERIOD = int(os.getenv("SMC_SWEEP_ATR_SMA_PERIOD", "50"))
 # ボラティリティフィルター有効化 (False=閑散相場フィルタ無効)
 SMC_SWEEP_VOLATILITY_FILTER_ENABLED = os.getenv("SMC_SWEEP_VOLATILITY_FILTER_ENABLED", "true").lower() == "true"
+# ADXフィルター: 方向感のない閑散相場 (ADX < 閾値) でのエントリーを全面ブロック
+ADX_FILTER_ENABLED = os.getenv("ADX_FILTER_ENABLED", "true").lower() == "true"
+ADX_PERIOD = int(os.getenv("ADX_PERIOD", "14"))
+# デフォルト閾値: ADX < 20 は方向感なし → エントリーしない
+ADX_MIN_THRESHOLD = float(os.getenv("ADX_MIN_THRESHOLD", "20.0"))
+# 銘柄別ADX閾値オーバーライド (デフォルトは ADX_MIN_THRESHOLD)
+ADX_MIN_THRESHOLD_BY_SYMBOL: dict = {
+    "GOLD":      20.0,
+    "US100Cash": 20.0,
+    "OILCash":   20.0,
+    "USDJPY":    20.0,
+    "EURUSD":    20.0,
+}
 # 機械的SMCゲート: AI呼び出し前に数値条件でフィルタリング
 # Falseにすると機械ゲートをスキップしてAIのみで判断
 SMC_MECHANICAL_GATE_ENABLED = os.getenv("SMC_MECHANICAL_GATE_ENABLED", "true").lower() == "true"
