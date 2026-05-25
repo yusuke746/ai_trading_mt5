@@ -22,11 +22,10 @@ import mt5_connector
 logger = logging.getLogger(__name__)
 
 # ── SMCゾーン描画カラー定数 (TradingView準拠) ──────────────────────
-_SMC_BULL_COLOR        = (0.149, 0.651, 0.604)   # #26a69a Emerald Green (Bullish)
-_SMC_BEAR_COLOR        = (0.937, 0.325, 0.314)   # #ef5350 Soft Red       (Bearish)
-_SMC_FVG_COLOR         = (0.380, 0.337, 0.784)   # #6157c8 Purple         (Fair Value Gap)
-_SMC_CONF_BULL_COLOR   = (1.000, 0.843, 0.000)   # #FFD700 Gold           (H1+M15 Confluence Bull)
-_SMC_CONF_BEAR_COLOR   = (1.000, 0.500, 0.000)   # #FF8000 Orange         (H1+M15 Confluence Bear)
+_SMC_BULL_COLOR        = (0.118, 0.565, 1.000)   # #1E90FF DodgerBlue    (Buy zones)
+_SMC_BEAR_COLOR        = (0.937, 0.325, 0.314)   # #ef5350 Soft Red       (Sell zones)
+_SMC_CONF_BULL_COLOR   = (0.000, 0.749, 1.000)   # #00BFFF DeepSkyBlue   (Confluence Buy)
+_SMC_CONF_BEAR_COLOR   = (1.000, 0.271, 0.000)   # #FF4500 OrangeRed      (Confluence Sell)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -138,7 +137,6 @@ def generate_smc_chart_base64(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
-    from matplotlib.lines import Line2D
 
     df = mt5_connector.get_rates(symbol, timeframe, bars + config.MA_PERIOD)
     if df is None or len(df) < config.MA_PERIOD + 10:
@@ -215,27 +213,27 @@ def generate_smc_chart_base64(
     hlines_styles: list[str] = []
     hlines_widths: list[float] = []
 
-    # BOS: 青の実線
+    # BOS: 位置に応じた色（下=青サポート / 上=赤レジスタンス）、太線
     for lvl in bos_levels:
         try:
             f = float(lvl)
             if _draw_lo <= f <= _draw_hi:
                 hlines_prices.append(f)
-                hlines_colors.append("dodgerblue")
+                hlines_colors.append("dodgerblue" if f < current_close else "crimson")
                 hlines_styles.append("solid")
-                hlines_widths.append(1.5)
+                hlines_widths.append(3.0)
         except (TypeError, ValueError):
             pass
 
-    # CHoCH (H1): オレンジの破線
+    # CHoCH: 位置に応じた色、太い破線
     for lvl in choch_levels:
         try:
             f = float(lvl)
             if _draw_lo <= f <= _draw_hi:
                 hlines_prices.append(f)
-                hlines_colors.append("darkorange")
+                hlines_colors.append("cornflowerblue" if f < current_close else "salmon")
                 hlines_styles.append("dashed")
-                hlines_widths.append(1.5)
+                hlines_widths.append(2.5)
         except (TypeError, ValueError):
             pass
 
@@ -327,12 +325,9 @@ def generate_smc_chart_base64(
     if timeframe != config.TREND_TF:
         _trend_upper = str(h1_trend).upper()
         if _trend_upper == "UP":
-            _bg_color = (0.0, 0.5, 0.15, 0.07)
+            ax_main.set_facecolor((0.0, 0.55, 0.15, 0.13))
         elif _trend_upper == "DOWN":
-            _bg_color = (0.8, 0.1, 0.1, 0.07)
-        else:
-            _bg_color = (0.5, 0.5, 0.5, 0.04)
-        ax_main.set_facecolor(_bg_color)
+            ax_main.set_facecolor((0.75, 0.05, 0.05, 0.13))
 
     # ── Liquidityゾーン (半透明帯) ──
     for lvl in _pick_near_levels(
@@ -341,7 +336,7 @@ def generate_smc_chart_base64(
     ):
         if _draw_lo <= lvl <= _draw_hi:
             ax_main.axhspan(lvl - _liq_zone_h / 2, lvl + _liq_zone_h / 2,
-                            color="deepskyblue", alpha=0.25, zorder=1)
+                            color="deepskyblue", alpha=0.40, zorder=1)
 
     for lvl in _pick_near_levels(
         [l for l in smc.get("sell_liquidity", []) if float(l) < current_close],
@@ -349,10 +344,10 @@ def generate_smc_chart_base64(
     ):
         if _draw_lo <= lvl <= _draw_hi:
             ax_main.axhspan(lvl - _liq_zone_h / 2, lvl + _liq_zone_h / 2,
-                            color="firebrick", alpha=0.25, zorder=1)
+                            color="crimson", alpha=0.40, zorder=1)
 
     # ── PDH/PDL/PWH/PWLゾーン ──
-    for key, _zcolor in [("pdh", "gold"), ("pdl", "gold"), ("pwh", "orchid"), ("pwl", "orchid")]:
+    for key, _zcolor in [("pdh", "crimson"), ("pwh", "crimson"), ("pdl", "dodgerblue"), ("pwl", "dodgerblue")]:
         val = smc.get(key)
         if val is not None:
             try:
@@ -362,72 +357,39 @@ def generate_smc_chart_base64(
             except (TypeError, ValueError):
                 pass
 
-    # ── EQHゾーン (現在価格より上) ──
+    # ── EQHゾーン (現在価格より上 → 売りゾーン=赤) ──
     for lvl in smc.get("eq_highs", []):
         try:
             f = float(lvl)
             if f > current_close and _draw_lo <= f <= _draw_hi:
-                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="#FFD700", alpha=0.20, zorder=1)
+                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="crimson", alpha=0.30, zorder=1)
         except (TypeError, ValueError):
             pass
 
-    # ── EQLゾーン (現在価格より下) ──
+    # ── EQLゾーン (現在価格より下 → 買いゾーン=青) ──
     for lvl in smc.get("eq_lows", []):
         try:
             f = float(lvl)
             if f < current_close and _draw_lo <= f <= _draw_hi:
-                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="#00CED1", alpha=0.20, zorder=1)
+                ax_main.axhspan(f - _liq_zone_h, f + _liq_zone_h, color="dodgerblue", alpha=0.30, zorder=1)
         except (TypeError, ValueError):
             pass
 
-    # ── M15 CHoCH: コーラルの一点鎖線 (テキストなし) ──
+    # ── M15 CHoCH: 位置に応じた色、太い一点鎖線 ──
     if timeframe != config.TREND_TF:
         for lvl in smc.get("m15_choch_levels", []):
             try:
                 _lvl = float(lvl)
                 if _draw_lo <= _lvl <= _draw_hi:
-                    ax_main.axhline(_lvl, color="coral", linewidth=1.2,
-                                    linestyle=(0, (3, 1, 1, 1)), zorder=6, alpha=0.85)
+                    _cc = "cornflowerblue" if _lvl < current_close else "salmon"
+                    ax_main.axhline(_lvl, color=_cc, linewidth=2.5,
+                                    linestyle=(0, (3, 1, 1, 1)), zorder=6, alpha=0.90)
             except (TypeError, ValueError):
                 pass
 
-    # 現在価格ライン: 黄色の点線 + 右端に価格ラベル
+    # 現在価格ライン: 黄色の点線
     _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
-    _price_fmt = f"{current_close:.{min(_digits, 5)}f}"
-    ax_main.axhline(current_close, color="#FFD700", linewidth=1.2, linestyle=(0, (4, 2)), zorder=9, alpha=0.9)
-    ax_main.text(
-        len(ohlc) - 1 + 0.5,
-        current_close,
-        f" ▶{_price_fmt}",
-        color="#FFD700",
-        fontsize=7,
-        va="center",
-        ha="left",
-        fontweight="bold",
-        bbox=dict(facecolor="#1a1a1a", edgecolor="#FFD700", alpha=0.8, boxstyle="round,pad=0.2"),
-        zorder=12,
-    )
-
-    # TP価格ラベル (チャート範囲内の場合のみ)
-    if tp_price is not None:
-        try:
-            _tp_f = float(tp_price)
-            if _draw_lo <= _tp_f <= _draw_hi:
-                _tp_fmt = f"{_tp_f:.{min(_digits, 5)}f}"
-                ax_main.text(
-                    len(ohlc) - 1 + 0.5,
-                    _tp_f,
-                    f" TP:{_tp_fmt}",
-                    color="#00E676",
-                    fontsize=6.5,
-                    va="center",
-                    ha="left",
-                    fontweight="bold",
-                    bbox=dict(facecolor="#1a1a1a", edgecolor="#00E676", alpha=0.75, boxstyle="round,pad=0.2"),
-                    zorder=12,
-                )
-        except (TypeError, ValueError):
-            pass
+    ax_main.axhline(current_close, color="#FFD700", linewidth=1.5, linestyle=(0, (4, 2)), zorder=9, alpha=0.9)
 
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     ob_zones: list[dict] = ob_zones_raw
@@ -509,9 +471,9 @@ def generate_smc_chart_base64(
             else:
                 color = _SMC_BULL_COLOR if zone_type == "bull" else _SMC_BEAR_COLOR
 
-            face_alpha = 0.28 if is_confluence else 0.18
-            edge_alpha = 1.0  if is_confluence else 0.75
-            linewidth  = 1.8  if is_confluence else 0.8
+            face_alpha = 0.35 if is_confluence else 0.25
+            edge_alpha = 1.0  if is_confluence else 0.85
+            linewidth  = 2.5  if is_confluence else 1.5
             rect = mpatches.Rectangle(
                 xy=(_ob_start_x, lo),
                 width=box_width,
@@ -527,8 +489,8 @@ def generate_smc_chart_base64(
             ax_main.plot(
                 [_ob_start_x, _ob_start_x + box_width],
                 [_ob_mid, _ob_mid],
-                color=(*color, 0.55),
-                linewidth=0.7,
+                color=(*color, 0.70),
+                linewidth=1.2,
                 linestyle="dashed",
                 zorder=3,
             )
@@ -548,52 +510,21 @@ def generate_smc_chart_base64(
                 _fvg_start_x = _ob_start_fallback
             _fvg_width = max(1, len(ohlc) - 1 - _fvg_start_x)
 
+            # 現在価格より上=売りゾーン(赤), 下=買いゾーン(青)
+            _fvg_mid = (hi + lo) / 2
+            _fvg_col = _SMC_BEAR_COLOR if _fvg_mid > current_close else _SMC_BULL_COLOR
             rect = mpatches.Rectangle(
                 xy=(_fvg_start_x, lo),
                 width=_fvg_width,
                 height=hi - lo,
-                linewidth=0.6,
-                edgecolor=(*_SMC_FVG_COLOR, 0.55),
-                facecolor=(*_SMC_FVG_COLOR, 0.11),
+                linewidth=1.2,
+                edgecolor=(*_fvg_col, 0.65),
+                facecolor=(*_fvg_col, 0.18),
                 zorder=2,
             )
             ax_main.add_patch(rect)
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
-
-    # ── 凡例: 簡略版 ──
-    _trend_label = {"UP": "H1:UP↑", "DOWN": "H1:DWN↓", "SIDEWAYS": "H1:SIDE"}.get(
-        str(h1_trend).upper(), ""
-    )
-    legend_handles = [
-        Line2D([0], [0], color="dodgerblue", lw=1.5, ls="solid",  label="BOS"),
-        Line2D([0], [0], color="darkorange", lw=1.5, ls="dashed", label="CHoCH"),
-        Line2D([0], [0], color="#b2b5be",    lw=1.5, ls="solid",  label="MA20"),
-        mpatches.Patch(facecolor="deepskyblue", alpha=0.25, label="Buy Liq"),
-        mpatches.Patch(facecolor="firebrick",   alpha=0.25, label="Sell Liq"),
-        mpatches.Patch(facecolor=_SMC_BULL_COLOR, alpha=0.25, label="Bull OB"),
-        mpatches.Patch(facecolor=_SMC_BEAR_COLOR, alpha=0.25, label="Bear OB"),
-        mpatches.Patch(facecolor=_SMC_FVG_COLOR,  alpha=0.18, label="FVG"),
-        mpatches.Patch(facecolor="gold", alpha=0.20, label="PDH/PDL"),
-    ]
-    if tp_price is not None:
-        legend_handles.append(Line2D([0], [0], color="#00E676", lw=2.0, ls="dashed", label="TP"))
-    if _trend_label and timeframe != config.TREND_TF:
-        _tcolor = {"UP": (0.0, 0.5, 0.15), "DOWN": (0.8, 0.1, 0.1)}.get(
-            str(h1_trend).upper(), (0.5, 0.5, 0.5)
-        )
-        legend_handles.insert(0, mpatches.Patch(facecolor=_tcolor, alpha=0.25, label=_trend_label))
-    ax_main.legend(
-        handles=legend_handles,
-        loc="upper left",
-        fontsize=6,
-        ncol=3,
-        framealpha=0.75,
-        facecolor="#1e222d",
-        edgecolor="#434651",
-        labelcolor="white",
-        borderpad=0.4,
-    )
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")
     plt.close(fig)

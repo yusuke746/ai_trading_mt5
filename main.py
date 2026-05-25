@@ -1084,28 +1084,61 @@ def _check_entry(symbol: str):
                 _tp_levels.append((float(_z["high"]) + float(_z["low"])) / 2)
             except (KeyError, TypeError, ValueError):
                 pass
+        # OBゾーン: BUYのTP候補 → Bear OBのlow（上端手前の最初の抵抗）
+        #           SELLのTP候補 → Bull OBのhigh（下端手前の最初の支持）
+        for _ob_key in ("ob_zones", "h1_ob_zones"):
+            for _z in smc_data.get(_ob_key, []):
+                try:
+                    _zt = str(_z.get("type", "")).lower()
+                    if _zt == "bear":
+                        _tp_levels.append(float(_z["low"]))   # BUY方向の天井
+                    elif _zt == "bull":
+                        _tp_levels.append(float(_z["high"]))  # SELL方向の床
+                except (KeyError, TypeError, ValueError):
+                    pass
 
-    # 利益方向の最近接構造レベルをTPに設定
+    # 利益方向の構造TPを設定
+    # 採用範囲: [entry + min_tp, entry + ideal × 2.0]
+    #   - 下限(min_tp): RR<1.0の直前抵抗を除外（PDHが2.6pt届かない場合等）
+    #   - 上限(ideal×2.0): 遠すぎるpwh/pwlへ飛ぶのを防止
+    #   - 範囲内候補なし かつ ideal_tp経路に障害物あり → エントリー見送り
+    #   - 範囲内候補なし かつ ideal_tp経路が空き → ideal_rr (ATRベース) にフォールバック
     tp_distance = ideal_tp_distance  # fallback
     _tp_source = "ideal_rr"
+    _tp_cap_distance = ideal_tp_distance * 2.0  # 採用上限: ideal×2.0
     if direction == "BUY":
-        _candidates = sorted([v for v in _tp_levels if v > entry_price + min_tp_distance])
+        _candidates = sorted([
+            v for v in _tp_levels
+            if entry_price + min_tp_distance <= v <= entry_price + _tp_cap_distance
+        ])
         if _candidates:
             tp_distance = _candidates[0] - entry_price
             _tp_source = "structural"
     else:
         _candidates = sorted(
-            [v for v in _tp_levels if v < entry_price - min_tp_distance],
+            [
+                v for v in _tp_levels
+                if entry_price - _tp_cap_distance <= v <= entry_price - min_tp_distance
+            ],
             reverse=True,
         )
         if _candidates:
             tp_distance = entry_price - _candidates[0]
             _tp_source = "structural"
 
-    # 最小RR保証
-    if tp_distance < min_tp_distance:
-        tp_distance = min_tp_distance
-        _tp_source = "min_rr_floor"
+    # 有効構造TPなし（ideal_rrフォールバック）: ideal_tp経路に構造障害物があれば見送り
+    # 障害物 = entry～ideal_tp間に存在する構造レベル (RR<1.0で除外されたPDH/PDL等)
+    if _tp_source == "ideal_rr":
+        if direction == "BUY":
+            _obstacles = [v for v in _tp_levels if entry_price < v < entry_price + ideal_tp_distance]
+        else:
+            _obstacles = [v for v in _tp_levels if entry_price - ideal_tp_distance < v < entry_price]
+        if _obstacles:
+            logger.info(
+                "[EntryMonitor] %s: 有効構造TP不在・ideal_tp経路に障害物%s → エントリー見送り (RR不足)",
+                symbol, sorted(_obstacles)[:3],
+            )
+            return
 
     if direction == "BUY":
         tp_price = round(entry_price + tp_distance, digits)
