@@ -398,8 +398,8 @@ def _mechanical_smc_gate(
         ma_slope = ma_curr - ma_past
 
         if abs(ma_slope) >= atr_h1 * config.SMC_CONTINUATION_MA_SLOPE_ATR_MULT:
-            if ma_slope > 0 and current_price <= ma_curr + atr_h1 * 0.5:
-                # 上昇トレンド + 価格がMA付近以下: BUY押し目セットアップ
+            if ma_slope > 0 and current_price <= ma_curr + atr_h1 * config.SMC_CONTINUATION_PRICE_MAX_ATR_MULT:
+                # 上昇トレンド + 価格がMA付近以下: BUY順張りセットアップ（AI判断に委ねる）
                 cont_sweep_type = "LOW"
                 bos_pass = True
                 cont_sl_dist = atr_h1 * 1.5
@@ -407,8 +407,8 @@ def _mechanical_smc_gate(
                 targets = [v for v in levels if v > current_price]
                 rr_pass = bool(targets) and (min(targets) - current_price) >= cont_min_tp
                 return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS", None, cont_sl_dist
-            elif ma_slope < 0 and current_price >= ma_curr - atr_h1 * 0.5:
-                # 下降トレンド + 価格がMA付近以上: SELL戻しセットアップ
+            elif ma_slope < 0 and current_price >= ma_curr - atr_h1 * config.SMC_CONTINUATION_PRICE_MAX_ATR_MULT:
+                # 下降トレンド + 価格がMA付近以上: SELL順張りセットアップ（AI判断に委ねる）
                 cont_sweep_type = "HIGH"
                 bos_pass = True
                 cont_sl_dist = atr_h1 * 1.5

@@ -218,6 +218,9 @@ SMC_CONTINUATION_BOS_LOOKBACK_BARS = int(os.getenv("SMC_CONTINUATION_BOS_LOOKBAC
 # 順張りBOS判定: MA傾きの最小値 (ATR比率) — この値未満のMA傾きはトレンドなしとみなす
 # 0.15: 以前の0.3から緩和、緩やかなトレンドでもCONTINUATION_BOSが発動するように
 SMC_CONTINUATION_MA_SLOPE_ATR_MULT = float(os.getenv("SMC_CONTINUATION_MA_SLOPE_ATR_MULT", "0.15"))
+# 順張りBOS判定: MAから現在価格までの最大距離 (ATR倍率)
+# 0.5 = 旧来の厳格設定(押し目必須), 5.0 = 緩和(トレンド継続中でもAIに渡す)
+SMC_CONTINUATION_PRICE_MAX_ATR_MULT = float(os.getenv("SMC_CONTINUATION_PRICE_MAX_ATR_MULT", "5.0"))
 # 機械ゲートRR判定の緩和係数 (1.0未満で緩和、0.5〜1.0の範囲推奨)
 try:
     SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.75"))))
