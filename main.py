@@ -597,7 +597,7 @@ def _check_entry(symbol: str):
     # 市場ストレス検知チェック (スプレッド/ATR急変 → 既にストレス状態)
     if market_stress.is_stressed(symbol):
         st = market_stress.get_stress_state(symbol)
-        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.strftime('%H:%M UTC')})"
+        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.strftime('%m/%d %H:%M UTC')})"
         logger.info("[Entry] %s: 市場ストレス状態 → エントリーブロック (%s)", symbol, reason)
         discord_notifier.send_skip(symbol, reason, notify=False)
         return
@@ -634,7 +634,7 @@ def _check_entry(symbol: str):
             baseline_atr=baseline_atr_val,
         )
         if stress:
-            reason = f"[MarketStress] {stress.risk_level}: {stress.summary} (hold_until={stress.hold_until.strftime('%H:%M UTC')})"
+            reason = f"[MarketStress] {stress.risk_level}: {stress.summary} (hold_until={stress.hold_until.strftime('%m/%d %H:%M UTC')})"
             logger.warning("[Entry] %s: 市場ストレス新規検知 → エントリーブロック (%s)", symbol, reason)
             discord_notifier.send_skip(symbol, reason, notify=True)
             return

@@ -283,6 +283,8 @@ MARKET_STRESS_AI_ENABLED   = os.getenv("MARKET_STRESS_AI_ENABLED", "true").lower
 # GPTが提案するhold_minutesの最小・最大クランプ (分)
 MARKET_STRESS_HOLD_MIN_MIN = int(os.getenv("MARKET_STRESS_HOLD_MIN_MIN", "10"))  # 30→10分に短縮
 MARKET_STRESS_HOLD_MAX_MIN = int(os.getenv("MARKET_STRESS_HOLD_MAX_MIN", "480"))
+# hold_until を過ぎてからこの分数後は、スプレッド/ATR高止まりでも強制解除する絶対期限
+MARKET_STRESS_FORCE_CLEAR_GRACE_MIN = int(os.getenv("MARKET_STRESS_FORCE_CLEAR_GRACE_MIN", "30"))
 # スプレッドが平常比 1.5 倍未満に戻ったら解除条件を満たすとみなす
 MARKET_STRESS_SPREAD_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_CLEAR_RATIO", "1.5"))
 # ATRが平常比 1.3 倍未満に戻ったら解除条件を満たすとみなす

@@ -175,7 +175,7 @@ def check_and_update(
         "[MarketStress] %s: ストレス状態追加 risk=%s hold_until=%s source=%s summary=%s",
         symbol,
         new_state.risk_level,
-        new_state.hold_until.strftime("%H:%M UTC"),
+        new_state.hold_until.strftime("%m/%d %H:%M UTC"),
         new_state.source,
         new_state.summary,
     )
@@ -199,6 +199,15 @@ def _check_clear(
     # hold_until を超えていない場合はまだ解除しない
     if now < state.hold_until:
         return False
+
+    # 強制解除期限: hold_until + GRACE 分を過ぎたらスプレッド/ATR問わず強制解除
+    force_clear_at = state.hold_until + timedelta(minutes=config.MARKET_STRESS_FORCE_CLEAR_GRACE_MIN)
+    if now >= force_clear_at:
+        logger.warning(
+            "[MarketStress] %s: 強制解除 (hold_until+%d分経過, spread=%.1f) → エントリー再開",
+            symbol, config.MARKET_STRESS_FORCE_CLEAR_GRACE_MIN, current_spread,
+        )
+        return True
 
     # 条件1: スプレッドが正常範囲に戻っているか
     if baseline_spread and baseline_spread > 0:
