@@ -10,9 +10,11 @@ import sys
 import time
 import logging
 import base64
-from datetime import UTC
+from datetime import UTC, timezone
 from datetime import datetime
 from datetime import timedelta
+
+_JST = timezone(timedelta(hours=9))
 
 import config
 import mt5_connector
@@ -479,16 +481,17 @@ def _should_flatten_before_market_close(now: datetime | None = None) -> str | No
     if not config.FLAT_BEFORE_MARKET_CLOSE_ENABLED:
         return None
 
-    current = now or datetime.now()
-    close_dt = current.replace(
+    # FLAT_BEFORE_MARKET_CLOSE_HOUR/MINUTE は UTC 基準で設定する前提
+    current_utc = (now.astimezone(UTC) if (now and now.tzinfo) else datetime.now(UTC))
+    close_dt = current_utc.replace(
         hour=config.FLAT_BEFORE_MARKET_CLOSE_HOUR,
         minute=config.FLAT_BEFORE_MARKET_CLOSE_MINUTE,
         second=0,
         microsecond=0,
     )
-    if close_dt <= current:
+    if close_dt <= current_utc:
         close_dt += timedelta(days=1)
-    minutes_to_close = (close_dt - current).total_seconds() / 60
+    minutes_to_close = (close_dt - current_utc).total_seconds() / 60
     lead_minutes = config.FLAT_BEFORE_MARKET_CLOSE_LEAD_MINUTES
     if 0 <= minutes_to_close <= lead_minutes:
         return (
@@ -597,7 +600,7 @@ def _check_entry(symbol: str):
     # 市場ストレス検知チェック (スプレッド/ATR急変 → 既にストレス状態)
     if market_stress.is_stressed(symbol):
         st = market_stress.get_stress_state(symbol)
-        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.strftime('%m/%d %H:%M UTC')})"
+        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.astimezone(_JST).strftime('%m/%d %H:%M JST')})"
         logger.info("[Entry] %s: 市場ストレス状態 → エントリーブロック (%s)", symbol, reason)
         discord_notifier.send_skip(symbol, reason, notify=False)
         return
@@ -634,7 +637,7 @@ def _check_entry(symbol: str):
             baseline_atr=baseline_atr_val,
         )
         if stress:
-            reason = f"[MarketStress] {stress.risk_level}: {stress.summary} (hold_until={stress.hold_until.strftime('%m/%d %H:%M UTC')})"
+            reason = f"[MarketStress] {stress.risk_level}: {stress.summary} (hold_until={stress.hold_until.astimezone(_JST).strftime('%m/%d %H:%M JST')})"
             logger.warning("[Entry] %s: 市場ストレス新規検知 → エントリーブロック (%s)", symbol, reason)
             discord_notifier.send_skip(symbol, reason, notify=True)
             return

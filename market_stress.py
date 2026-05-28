@@ -18,7 +18,9 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+
+_JST = timezone(timedelta(hours=9))
 
 import config
 
@@ -175,7 +177,7 @@ def check_and_update(
         "[MarketStress] %s: ストレス状態追加 risk=%s hold_until=%s source=%s summary=%s",
         symbol,
         new_state.risk_level,
-        new_state.hold_until.strftime("%m/%d %H:%M UTC"),
+        new_state.hold_until.astimezone(_JST).strftime("%m/%d %H:%M JST"),
         new_state.source,
         new_state.summary,
     )
