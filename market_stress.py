@@ -217,17 +217,8 @@ def _check_clear(
             )
             return False
 
-    # 条件3: ニュースブロックが解除されているか
-    try:
-        import news_monitor
-        news_blocked, news_reason = news_monitor.check_entry_news_block(symbol)
-        if news_blocked:
-            logger.debug(
-                "[MarketStress] %s: ニュースブロック中 → 解除保留 (%s)", symbol, news_reason
-            )
-            return False
-    except Exception:
-        pass  # news_monitor 取得失敗は無視して解除を許可
+    # 条件3 (廃止): ニュースブロックはエントリー時に main.py が個別チェックするため
+    # ストレス解除の条件としては使わない。スプレッド/ATRが正常化すれば解除を許可する。
 
     return True
 

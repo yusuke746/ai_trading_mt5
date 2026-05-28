@@ -175,12 +175,12 @@ _HIGH_KEYWORDS = [
 ]
 
 # MEDIUM判定キーワード (スコア+1)
+# 注: FXニュースに常時出現する汎用単語 (fed/boj/oil/gold等) は除外。
+# 具体的な市場リスクワードのみ残す。
 _MEDIUM_KEYWORDS = [
     "inflation", "recession", "slowdown", "tariff", "trade war",
-    "fed", "fomc", "boj", "ecb", "central bank",
-    "gdp", "cpi", "ppi", "nfp", "unemployment",
     "geopolit", "tension", "conflict", "protest", "election",
-    "oil", "crude", "gold", "yen", "dollar", "euro",
+    "bank run", "liquidity", "systemic",
 ]
 
 _FINNHUB_TIMEOUT_SEC = 10
@@ -201,6 +201,7 @@ def _fetch_finnhub_headlines(symbol: str, hours_back: int = 6) -> list[str]:
     to_dt = datetime.now(UTC)
     from_str = from_dt.strftime("%Y-%m-%d")
     to_str = to_dt.strftime("%Y-%m-%d")
+    cutoff_ts = int(from_dt.timestamp())  # 個別記事の鮮度チェック用
 
     # Forex/commodity は general news category でフォールバック
     urls_to_try: list[str] = []
@@ -222,7 +223,11 @@ def _fetch_finnhub_headlines(symbol: str, hours_back: int = 6) -> list[str]:
             with urlopen(req, timeout=_FINNHUB_TIMEOUT_SEC) as resp:
                 data = _json.loads(resp.read())
             if isinstance(data, list) and data:
-                headlines = [item.get("headline", "") for item in data[:20] if item.get("headline")]
+                headlines = [
+                    item.get("headline", "")
+                    for item in data[:20]
+                    if item.get("headline") and item.get("datetime", 0) >= cutoff_ts
+                ]
                 if headlines:
                     return headlines
         except Exception:
