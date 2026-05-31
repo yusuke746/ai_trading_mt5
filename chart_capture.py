@@ -321,13 +321,19 @@ def generate_smc_chart_base64(
     ax_main.set_xlim(right=len(ohlc) - 1 + 4)
     ax_main.set_ylim(_draw_lo, _draw_hi)
 
-    # ── H1トレンド背景色 (M15チャートのみ) ──
+    # ── H1トレンド方向表示 (M15チャートのみ): 背景塗りつぶしはAI色認識を妨げるため
+    # axes枠線 (spine) の色変更に変更。背景は純黒のまま維持。
     if timeframe != config.TREND_TF:
         _trend_upper = str(h1_trend).upper()
         if _trend_upper == "UP":
-            ax_main.set_facecolor((0.0, 0.55, 0.15, 0.13))
+            _spine_color = "#00C853"   # 緑: 上昇トレンド
         elif _trend_upper == "DOWN":
-            ax_main.set_facecolor((0.75, 0.05, 0.05, 0.13))
+            _spine_color = "#FF5252"   # 赤: 下降トレンド
+        else:
+            _spine_color = "#9E9E9E"   # グレー: 横ばい
+        for _sp in ax_main.spines.values():
+            _sp.set_edgecolor(_spine_color)
+            _sp.set_linewidth(2.5)
 
     # ── Liquidityゾーン (半透明帯) ──
     for lvl in _pick_near_levels(

@@ -795,6 +795,77 @@ def _check_entry(symbol: str):
     except Exception:
         h1_trend_for_chart = "SIDEWAYS"
 
+    # ── AI呼び出し前の構造TP実現可能性チェック (APIコスト節約) ──────────────────────
+    # REVERSAL_SWEEPでrr_pass=Falseの場合にのみ先行実行。
+    # 後段の発注処理と同一ロジックで「有効TPなし＋経路障害物あり」を判定し、
+    # その場合はチャート生成・AI呼び出しを行わずにスキップする。
+    if mech_entry_type == "REVERSAL_SWEEP" and not smc_rr_pass and mech_structural_sl_dist:
+        _pre_dir = _entry_direction_from_mech_gate(mech_sweep_type, mech_entry_type)
+        if _pre_dir:
+            _sym_info_pre = mt5_connector.get_symbol_info(symbol)
+            _digits_pre = _sym_info_pre["digits"] if _sym_info_pre else 5
+            _pre_entry = price_info["ask"] if _pre_dir == "BUY" else price_info["bid"]
+            _pre_sl = mech_structural_sl_dist
+            _pre_min_tp = _pre_sl * config.ENTRY_MIN_TP_R
+            _pre_ideal_tp = _pre_sl * config.ENTRY_TP_R
+            _pre_cap = _pre_ideal_tp * 2.0
+
+            # TP候補レベル収集 (発注処理と同一セット)
+            _pre_levels: list[float] = []
+            if smc_data:
+                for _pk in ("pdh", "pdl", "pwh", "pwl"):
+                    _pv = smc_data.get(_pk)
+                    if _pv:
+                        _pre_levels.append(float(_pv))
+                for _pv in smc_data.get("swing_highs", []):
+                    _pre_levels.append(float(_pv))
+                for _pv in smc_data.get("swing_lows", []):
+                    _pre_levels.append(float(_pv))
+                for _pv in list(smc_data.get("eq_highs", [])) + list(smc_data.get("eq_lows", [])):
+                    try:
+                        _pre_levels.append(float(_pv))
+                    except (TypeError, ValueError):
+                        pass
+                for _pz in smc_data.get("fvg_zones", []):
+                    try:
+                        _pre_levels.append((float(_pz["high"]) + float(_pz["low"])) / 2)
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                for _pob_key in ("ob_zones", "h1_ob_zones"):
+                    for _pz in smc_data.get(_pob_key, []):
+                        try:
+                            _pzt = str(_pz.get("type", "")).lower()
+                            if _pzt == "bear":
+                                _pre_levels.append(float(_pz["low"]))
+                            elif _pzt == "bull":
+                                _pre_levels.append(float(_pz["high"]))
+                        except (KeyError, TypeError, ValueError):
+                            pass
+
+            if _pre_dir == "BUY":
+                _pre_candidates = [v for v in _pre_levels if _pre_entry + _pre_min_tp <= v <= _pre_entry + _pre_cap]
+                if not _pre_candidates:
+                    _pre_obstacles = sorted([v for v in _pre_levels if _pre_entry < v < _pre_entry + _pre_ideal_tp])
+                    if _pre_obstacles:
+                        logger.info(
+                            "[Entry] %s: AI前TP確認: 有効構造TP不在・ideal_tp経路に障害物%s → AI呼び出しスキップ (RR不足)",
+                            symbol, _pre_obstacles[:3],
+                        )
+                        return
+            else:  # SELL
+                _pre_candidates = [v for v in _pre_levels if _pre_entry - _pre_cap <= v <= _pre_entry - _pre_min_tp]
+                if not _pre_candidates:
+                    _pre_obstacles = sorted(
+                        [v for v in _pre_levels if _pre_entry - _pre_ideal_tp < v < _pre_entry],
+                        reverse=True,
+                    )
+                    if _pre_obstacles:
+                        logger.info(
+                            "[Entry] %s: AI前TP確認: 有効構造TP不在・ideal_tp経路に障害物%s → AI呼び出しスキップ (RR不足)",
+                            symbol, _pre_obstacles[:3],
+                        )
+                        return
+
     # SMCオーバーレイ付きチャート画像生成
     h1_b64, m15_b64 = chart_capture.generate_smc_chart_pair_base64(
         symbol=symbol,
