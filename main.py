@@ -404,7 +404,7 @@ def _mechanical_smc_gate(
                 # 上昇トレンド + 価格がMA付近以下: BUY順張りセットアップ（AI判断に委ねる）
                 cont_sweep_type = "LOW"
                 bos_pass = True
-                cont_sl_dist = atr_h1 * 1.5
+                cont_sl_dist = atr_h1 * 1.2
                 cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
                 targets = [v for v in levels if v > current_price]
                 rr_pass = bool(targets) and (min(targets) - current_price) >= cont_min_tp
@@ -413,7 +413,7 @@ def _mechanical_smc_gate(
                 # 下降トレンド + 価格がMA付近以上: SELL順張りセットアップ（AI判断に委ねる）
                 cont_sweep_type = "HIGH"
                 bos_pass = True
-                cont_sl_dist = atr_h1 * 1.5
+                cont_sl_dist = atr_h1 * 1.2
                 cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
                 targets = [v for v in levels if v < current_price]
                 rr_pass = bool(targets) and (current_price - max(targets)) >= cont_min_tp
