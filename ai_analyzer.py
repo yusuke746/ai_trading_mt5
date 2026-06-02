@@ -90,7 +90,8 @@ def analyze_entry(symbol: str, current_price: float,
     _expected_dir = "BUY" if _mech_sweep_type == "LOW" else ("SELL" if _mech_sweep_type == "HIGH" else "BUY or SELL")
 
     if _mech_entry_type == "CONTINUATION_BOS":
-        prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+        prompt = f"""[{symbol} / CONTINUATION_BOS / {_expected_dir}]
+あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
 複雑な数値計算や相場予測は不要です。画像に描画されている図形（ゾーン）とローソク足の位置関係・形状だけを確認し、以下の条件を満たしているか判定してください。
 
 【前提条件 (Python判定済み事実)】
@@ -119,7 +120,8 @@ def analyze_entry(symbol: str, current_price: float,
     else:
         # REVERSAL_SWEEP
         _sweep_dir = _mech_sweep_type  # "HIGH" or "LOW"
-        prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+        prompt = f"""[{symbol} / REVERSAL_SWEEP / {_sweep_dir}]
+あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
 複雑な数値計算や相場予測は不要です。画像に描画されている図形（ゾーン）とローソク足の位置関係・形状だけを確認し、以下の条件を満たしているか判定してください。
 
 【前提条件 (Python判定済み事実)】
@@ -351,7 +353,8 @@ TP到達率は {tp_progress_pct:.0f}% です（まだTP付近ではありませ�
     "news_impact": "N/A"
 }}"""
 
-    prompt = f"""あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
+    prompt = f"""[{symbol} / EXIT / {direction}]
+あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
 複雑な数値計算・相場予測は不要です。システムの機械判定の補助として、視覚パターンのみを確認してください。
 
 【重要】

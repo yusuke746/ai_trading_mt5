@@ -597,15 +597,7 @@ def _check_entry(symbol: str):
         discord_notifier.send_skip(symbol, news_reason, notify=False)
         return
 
-    # 市場ストレス検知チェック (スプレッド/ATR急変 → 既にストレス状態)
-    if market_stress.is_stressed(symbol):
-        st = market_stress.get_stress_state(symbol)
-        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.astimezone(_JST).strftime('%m/%d %H:%M JST')})"
-        logger.info("[Entry] %s: 市場ストレス状態 → エントリーブロック (%s)", symbol, reason)
-        discord_notifier.send_skip(symbol, reason, notify=False)
-        return
-
-    # レートデータ取得
+    # レートデータ取得 (市場ストレスチェックにATRが必要なため先に取得)
     df_h1 = mt5_connector.get_rates(symbol, config.TREND_TF, config.CHART_BARS + 30)
     df_m15 = mt5_connector.get_rates(symbol, config.EXECUTION_TF, config.CHART_BARS + 30)
     if df_h1 is None or df_m15 is None:
@@ -617,7 +609,8 @@ def _check_entry(symbol: str):
     atr_m15 = mt5_connector.calculate_atr(df_m15, config.ATR_PERIOD)
     ma20 = mt5_connector.calculate_ma(df_m15, config.MA_PERIOD)
 
-    # 市場ストレス検知 (スプレッド/ATR急変) — エントリー前に計測・更新
+    # 市場ストレス検知・解除チェック (スプレッド/ATR急変) — is_stressed より先に呼ぶことで
+    # hold_until 経過後の解除チェックが確実に行われるようにする
     sym_info_stress = mt5_connector.get_symbol_info(symbol)
     if sym_info_stress:
         current_spread = float(sym_info_stress.get("spread", 0))
@@ -641,6 +634,14 @@ def _check_entry(symbol: str):
             logger.warning("[Entry] %s: 市場ストレス新規検知 → エントリーブロック (%s)", symbol, reason)
             discord_notifier.send_skip(symbol, reason, notify=True)
             return
+
+    # 市場ストレス状態チェック (check_and_update で解除チェック済みの最新状態を参照)
+    if market_stress.is_stressed(symbol):
+        st = market_stress.get_stress_state(symbol)
+        reason = f"[MarketStress] {st.risk_level}: {st.summary} (hold_until={st.hold_until.astimezone(_JST).strftime('%m/%d %H:%M JST')})"
+        logger.info("[Entry] %s: 市場ストレス状態 → エントリーブロック (%s)", symbol, reason)
+        discord_notifier.send_skip(symbol, reason, notify=False)
+        return
 
     # 基本チェック用の指標を取得
     current_close = df_m15["close"].iloc[-1]

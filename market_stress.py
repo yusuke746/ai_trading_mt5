@@ -371,8 +371,39 @@ def get_stress_state(symbol: str) -> MarketStressState | None:
 
 
 def is_stressed(symbol: str) -> bool:
-    """エントリーをブロックすべきストレス状態か。"""
-    return get_stress_state(symbol) is not None
+    """エントリーをブロックすべきストレス状態か。
+
+    NOTE: main.py では is_stressed() が True の場合に早期 return するため
+    check_and_update() が呼ばれない。そのため hold_until の期限切れを
+    ここで自律的にチェックして強制解除する。
+    """
+    with _lock:
+        state = _stress_states.get(symbol)
+    if state is None:
+        return False
+
+    now = datetime.now(UTC)
+
+    # --- 強制解除チェック (check_and_update が呼ばれない場合の安全弁) ---
+    # hold_until + GRACE_MIN を超えたら無条件に解除
+    force_clear_at = state.hold_until + timedelta(minutes=config.MARKET_STRESS_FORCE_CLEAR_GRACE_MIN)
+    if now >= force_clear_at:
+        with _lock:
+            _stress_states.pop(symbol, None)
+            # 復帰後慎重モードを開始
+            _post_recovery_states[symbol] = PostRecoveryState(
+                symbol=symbol,
+                trades_remaining=config.POST_RECOVERY_TRADE_COUNT,
+                lot_multiplier=config.POST_RECOVERY_LOT_MULTIPLIER,
+                cleared_at=now,
+            )
+        logger.warning(
+            "[MarketStress] %s: 強制解除 (hold_until+%d分経過, is_stressed経由) → エントリー再開",
+            symbol, config.MARKET_STRESS_FORCE_CLEAR_GRACE_MIN,
+        )
+        return False
+
+    return True
 
 
 def clear_all() -> None:
