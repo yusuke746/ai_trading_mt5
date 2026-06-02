@@ -283,6 +283,51 @@ def fetch_recent_closed(lookback_days: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def fetch_recent_closed_detailed(lookback_days: int) -> list[dict]:
+    """直近 lookback_days 日の CLOSED トレードの詳細を返す (LLM分析用)。
+    ai_confidence / symbol も含む。
+    """
+    since = _iso_days_ago(lookback_days)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT market_regime, entry_type, result_profit,
+                   ai_confidence, symbol
+            FROM trades
+            WHERE status = 'CLOSED'
+              AND closed_at IS NOT NULL
+              AND result_profit IS NOT NULL
+              AND datetime(closed_at) >= datetime(?)
+            ORDER BY closed_at
+            """,
+            (since,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fetch_counterfactual_data(lookback_days: int) -> list[dict]:
+    """反実仮想（もし閾値がXだったら）分析用。
+    ai_confidence が記録されている CLOSED トレートを返す。
+    より長い lookback を使うことでサンプルを増やす。
+    """
+    since = _iso_days_ago(lookback_days)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT ai_confidence, result_profit
+            FROM trades
+            WHERE status = 'CLOSED'
+              AND closed_at IS NOT NULL
+              AND result_profit IS NOT NULL
+              AND ai_confidence IS NOT NULL
+              AND datetime(closed_at) >= datetime(?)
+            ORDER BY closed_at
+            """,
+            (since,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── AI logs ─────────────────────────────
 
 def insert_ai_log(symbol: str, action_type: str, ai_response: str,
