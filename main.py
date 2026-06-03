@@ -549,8 +549,8 @@ def _check_entry(symbol: str):
             trigger_dt = _as_utc(datetime.fromisoformat(trigger_closed_at))
             elapsed_min = (datetime.now(UTC) - trigger_dt).total_seconds() / 60
             if elapsed_min < 0:
-                pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
-            elif elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
+                elapsed_min = 0  # MT5サーバーGMT+3ズレで未来扱いになる場合は「今クローズ」とみなす
+            if elapsed_min < config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES:
                 remaining_min = config.SYMBOL_LOSS_STREAK_COOLDOWN_MINUTES - elapsed_min
                 logger.warning(
                     "[Entry] %s: 直近%d連敗のためクールダウン中 (残り%.0f/%.0f min) → スキップ",
@@ -575,8 +575,8 @@ def _check_entry(symbol: str):
                 elapsed_min = (datetime.now(UTC) - last_closed_dt).total_seconds() / 60
                 block_minutes = tf_minutes * config.SYMBOL_REENTRY_COOLDOWN_ALL_EXITS_BARS
                 if elapsed_min < 0:
-                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
-                elif elapsed_min < block_minutes:
+                    elapsed_min = 0  # MT5サーバーGMT+3ズレで未来扱いになる場合は「今クローズ」とみなす
+                if elapsed_min < block_minutes:
                     remaining_min = block_minutes - elapsed_min
                     logger.warning(
                         "[Entry] %s: 同銘柄クールダウン中(全Exit) 残り%.0f/%.0f min (%d bars, reason=%s) → スキップ",
@@ -687,8 +687,8 @@ def _check_entry(symbol: str):
                 elapsed_min = (datetime.now(UTC) - last_break_dt).total_seconds() / 60
                 block_minutes = _timeframe_to_minutes(config.EXECUTION_TF) * config.PREMISE_BREAK_REENTRY_BLOCK_BARS
                 if elapsed_min < 0:
-                    pass  # タイムスタンプ不信頼（MT5サーバーTZ問題）→ クールダウンスキップ
-                elif elapsed_min < block_minutes:
+                    elapsed_min = 0  # MT5サーバーGMT+3ズレで未来扱いになる場合は「今クローズ」とみなす
+                if elapsed_min < block_minutes:
                     remaining_min = block_minutes - elapsed_min
                     logger.warning(
                         "[Entry] %s: PREMISE_BREAK後の同方向再エントリー禁止中 (%s 残り%.0f/%.0f min, %d bars) → スキップ",
