@@ -389,7 +389,8 @@ def generate_smc_chart_base64(
 
     # 現在価格ライン: 黄色の点線
     _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
-    ax_main.axhline(current_close, color="#FFD700", linewidth=1.5, linestyle=(0, (4, 2)), zorder=9, alpha=0.9)
+    ax_main.axhline(current_close, color="#FFD700", linewidth=1.5, linestyle=(0, (4, 2)), zorder=9, alpha=0.9,
+                    label=f"現在値: {current_close:.{_digits}f}")
 
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     ob_zones: list[dict] = ob_zones_raw
@@ -525,6 +526,12 @@ def generate_smc_chart_base64(
             ax_main.add_patch(rect)
         except (KeyError, TypeError, ValueError) as e:
             logger.debug("FVGゾーン描画スキップ: %s", e)
+
+    # 現在価格ラインを凡例に追加（MA20凡例と統合）
+    _handles, _labels = ax_main.get_legend_handles_labels()
+    if _handles:
+        ax_main.legend(_handles, _labels, loc="upper left", fontsize=8,
+                       facecolor="#1a1a2e", edgecolor="gray", labelcolor="white")
 
     fig.savefig(buf, dpi=100, bbox_inches="tight")
     plt.close(fig)
