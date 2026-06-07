@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.request import urlopen, Request
+import requests as _requests
 
 from openai import OpenAI
 
@@ -79,9 +79,9 @@ def _fetch_calendar_events() -> list[dict]:
     """ForexFactory RSS を取得してHigh-impactイベントを返す。
     取得失敗時は空リストを返す（例外は上位でキャッチ）。
     """
-    req = Request(_FF_RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(req, timeout=_FF_TIMEOUT_SEC) as resp:
-        raw = resp.read()
+    resp = _requests.get(_FF_RSS_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=_FF_TIMEOUT_SEC)
+    resp.raise_for_status()
+    raw = resp.content
 
     root = ET.fromstring(raw)
     events: list[dict] = []
@@ -219,9 +219,9 @@ def _fetch_finnhub_headlines(symbol: str, hours_back: int = 6) -> list[str]:
 
     for url in urls_to_try:
         try:
-            req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urlopen(req, timeout=_FINNHUB_TIMEOUT_SEC) as resp:
-                data = _json.loads(resp.read())
+            r = _requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=_FINNHUB_TIMEOUT_SEC)
+            r.raise_for_status()
+            data = r.json()
             if isinstance(data, list) and data:
                 headlines = [
                     item.get("headline", "")
