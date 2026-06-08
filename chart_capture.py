@@ -390,7 +390,7 @@ def generate_smc_chart_base64(
     # 現在価格ライン: 黄色の点線
     _digits = len(str(current_close).rstrip('0').split('.')[-1]) if '.' in str(current_close) else 2
     ax_main.axhline(current_close, color="#FFD700", linewidth=1.5, linestyle=(0, (4, 2)), zorder=9, alpha=0.9,
-                    label=f"現在値: {current_close:.{_digits}f}")
+                    label=f"Price: {current_close:.{_digits}f}")
 
     # ── OBゾーン・FVGゾーンをRectangle Boxで描画 ──
     ob_zones: list[dict] = ob_zones_raw

@@ -54,6 +54,9 @@ class PostRecoveryState:
 _stress_states: dict[str, MarketStressState] = {}
 # symbol → PostRecoveryState (復帰後慎重モード状態)
 _post_recovery_states: dict[str, PostRecoveryState] = {}
+# symbol → 今回のストレスチェーン最初の検知時刻 (force-clear をまたいで保持)
+# 自然解除(スプレッド正常化)時のみリセットする。force-clear ではリセットしない。
+_stress_chain_start: dict[str, datetime] = {}
 _lock = threading.Lock()
 
 # 銘柄ごとのスプレッドベースライン (過去N件のスプレッドを保持)
@@ -92,8 +95,13 @@ def check_and_update(
     """
     now = datetime.now(UTC)
 
-    # ベースラインにスプレッドを記録
-    update_spread_baseline(symbol, current_spread)
+    # ── ベースラインはストレス非活性時のみ更新 (汚染防止) ──
+    # ストレス中に高スプレッド値をベースラインに混入させると
+    # 「平常時の基準値」が歪み、解除判定・再トリガー判定が狂う。
+    with _lock:
+        _no_active_stress = symbol not in _stress_states
+    if _no_active_stress:
+        update_spread_baseline(symbol, current_spread)
     baseline_spread = get_baseline_spread(symbol)
 
     # ── 既存ストレス状態の解除チェック ──
@@ -103,6 +111,10 @@ def check_and_update(
     if state is not None:
         cleared = _check_clear(state, symbol, current_spread, baseline_spread, now, current_atr, baseline_atr)
         if cleared:
+            # force-clear か自然解除かを判定
+            force_clear_at = state.hold_until + timedelta(minutes=config.MARKET_STRESS_FORCE_CLEAR_GRACE_MIN)
+            _is_force_clear = (now >= force_clear_at)
+
             with _lock:
                 del _stress_states[symbol]
                 # 復帰後慎重モードを開始: 最初 N 回はロット縮小
@@ -112,10 +124,15 @@ def check_and_update(
                     lot_multiplier=config.POST_RECOVERY_LOT_MULTIPLIER,
                     cleared_at=now,
                 )
+                # 自然解除 (スプレッド正常化) の場合のみチェーンをリセット
+                # force-clear はまだ原因が続いている可能性があるため保持する
+                if not _is_force_clear:
+                    _stress_chain_start.pop(symbol, None)
             logger.info(
-                "[MarketStress] %s: ストレス状態解除 (保持 %.0f 分, spread=%.1f) "
+                "[MarketStress] %s: ストレス状態解除 (%s, 保持 %.0f 分, spread=%.1f) "
                 "→ 復帰後慎重モード開始 (x%.1f × 最初%d回)",
                 symbol,
+                "force" if _is_force_clear else "natural",
                 (now - state.triggered_at).total_seconds() / 60,
                 current_spread,
                 config.POST_RECOVERY_LOT_MULTIPLIER,
@@ -151,6 +168,19 @@ def check_and_update(
     if not triggered_sources:
         return None
 
+    # ── チェーン継続時間チェック: 同一原因による再トリガーを上限時間で抑制 ──
+    with _lock:
+        chain_start = _stress_chain_start.get(symbol)
+    if chain_start is not None:
+        chain_hours = (now - chain_start).total_seconds() / 3600
+        if chain_hours >= config.MARKET_STRESS_MAX_CHAIN_HOURS:
+            logger.info(
+                "[MarketStress] %s: ストレスチェーン %.1f h 継続 (上限 %.1f h) "
+                "→ 同一原因による再トリガーを抑制・エントリー解放",
+                symbol, chain_hours, config.MARKET_STRESS_MAX_CHAIN_HOURS,
+            )
+            return None
+
     # ストレス検知 → GPT判断 or フォールバックTTL
     source_str = "_".join(triggered_sources) if len(triggered_sources) == 1 else "both"
 
@@ -171,6 +201,9 @@ def check_and_update(
     )
 
     with _lock:
+        # チェーン開始時刻を初回のみ記録 (force-clear をまたいで保持するため上書き不可)
+        if symbol not in _stress_chain_start:
+            _stress_chain_start[symbol] = now
         _stress_states[symbol] = new_state
 
     logger.warning(
@@ -410,3 +443,4 @@ def clear_all() -> None:
     """全ストレス状態をクリア (テスト・デバッグ用)。"""
     with _lock:
         _stress_states.clear()
+        _stress_chain_start.clear()

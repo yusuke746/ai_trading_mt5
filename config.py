@@ -291,6 +291,10 @@ MARKET_STRESS_SPREAD_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_SPREAD_CLEAR_R
 MARKET_STRESS_ATR_CLEAR_RATIO = float(os.getenv("MARKET_STRESS_ATR_CLEAR_RATIO", "1.3"))
 # 平常スプレッドのベースライン計算に使う過去サンプル数 (銘柄ごと)
 MARKET_STRESS_SPREAD_BASELINE_N = int(os.getenv("MARKET_STRESS_SPREAD_BASELINE_N", "50"))
+# 同一原因による再トリガーチェーンの上限時間 (時間単位)
+# この時間を超えて連続ストレス判定が続いた場合、再トリガーを抑制してエントリーを解放する
+# 例: 月曜早朝の流動性低下が3時間続いても4時間待つ必要はないため
+MARKET_STRESS_MAX_CHAIN_HOURS  = float(os.getenv("MARKET_STRESS_MAX_CHAIN_HOURS", "3.0"))
 # ストレス解除直後の慎重モード: 最初 N 回のエントリーはロットを縮小する
 POST_RECOVERY_TRADE_COUNT      = int(os.getenv("POST_RECOVERY_TRADE_COUNT", "1"))
 POST_RECOVERY_LOT_MULTIPLIER   = float(os.getenv("POST_RECOVERY_LOT_MULTIPLIER", "0.5"))

@@ -87,6 +87,7 @@ def analyze_entry(symbol: str, current_price: float,
 
     _mech_entry_type = mech_gate.get("entry_type", "REVERSAL_SWEEP") if mech_gate else "REVERSAL_SWEEP"
     _mech_sweep_type = str(mech_gate.get("sweep_type", "NONE")).upper() if mech_gate else "NONE"
+    _mech_swept_level: float | None = mech_gate.get("swept_level") if mech_gate else None
     _expected_dir = "BUY" if _mech_sweep_type == "LOW" else ("SELL" if _mech_sweep_type == "HIGH" else "BUY or SELL")
 
     if _mech_entry_type == "CONTINUATION_BOS":
@@ -120,6 +121,22 @@ def analyze_entry(symbol: str, current_price: float,
     else:
         # REVERSAL_SWEEP
         _sweep_dir = _mech_sweep_type  # "HIGH" or "LOW"
+
+        # swept_levelのヒント文を構築
+        if _mech_swept_level is not None:
+            _wick_side = "上ヒゲ" if _sweep_dir == "HIGH" else "下ヒゲ"
+            _zone_side = "上側" if _sweep_dir == "HIGH" else "下側"
+            _return_dir = "下方向" if _sweep_dir == "HIGH" else "上方向"
+            _line_color = "オレンジ色の破線" if _sweep_dir == "HIGH" else "緑色の破線"
+            _swept_hint = f"""
+【⚠️ 注目すべき価格レベル (Python検出)】
+・スイープされたレベル: {_mech_swept_level} (チャート上の{_line_color}がこのレベルを示しています)
+・Pythonが検出したスイープは「{_sweep_dir}」方向です。つまり価格が {_mech_swept_level} を{_zone_side}に一瞬突き抜けた後、{_return_dir}に戻ったことを意味します。
+・確認すべきローソク足は「{_line_color}ライン付近で{_wick_side}を残して確定したもの」です。
+・チャートに別の方向の目立つヒゲ（例：大きな下ヒゲ）があっても、それはスイープとは別のイベントです。{_line_color}ライン付近の{_wick_side}だけに着目してください。"""
+        else:
+            _swept_hint = ""
+
         prompt = f"""[{symbol} / REVERSAL_SWEEP / {_sweep_dir}]
 あなたはチャート画像の「図形とローソク足のパターン」を視覚的に確認するアシスタントです。
 複雑な数値計算や相場予測は不要です。画像に描画されている図形（ゾーン）とローソク足の位置関係・形状だけを確認し、以下の条件を満たしているか判定してください。
@@ -128,21 +145,22 @@ def analyze_entry(symbol: str, current_price: float,
 ・エントリータイプ: REVERSAL_SWEEP (Liquidity Sweep後の反転)
 ・判定方向: {_sweep_dir}
 ※LOW sweepの場合はBUYのみ、HIGH sweepの場合はSELLのみを検討し、逆の場合はSKIPとしてください。
-
+{_swept_hint}
 【視覚的チェック項目】
-① ヒゲの反発（Sweep）: ローソク足が、チャートの下部（または上部）にある主要なラインやゾーン（色のついた帯）を一度突き抜けた後、長いヒゲ（ピンバー）を残して内側に戻って確定しているか？
+① ヒゲの反発（Sweep）: 上記スイープレベル付近のローソク足が、そのレベルを一度突き抜けた後、長いヒゲ（ピンバー）を残して内側に戻って確定しているか？
 ② プライスアクション: ヒゲを付けた後、反転方向への強い動き（包み足、または反発を示す明確な大陽線/大陰線）が確認できるか？
 ③ 空間的ゆとり: エントリー方向のすぐ目の前に、逆方向の分厚いゾーン（障害物）が立ち塞がっていないか？（視覚的に価格が伸びるスペースがあるか）
 
 【SKIP基準】
-・ヒゲが短すぎる、または実体でゾーンを完全に抜けてしまっている（ブレイクアウトになっている）。
+・スイープレベル付近に{("上ヒゲ" if _sweep_dir == "HIGH" else "下ヒゲ")}が確認できない、またはヒゲが短すぎる。
+・実体でゾーンを完全に抜けてしまっている（ブレイクアウトになっている）。
 ・反発の勢いが弱く、セットアップの形が視覚的に美しくない・不明確である。
 
 【回答フォーマット (JSONのみ・コメント不要)】
 {{
   "decision": "BUY" または "SELL" または "SKIP",
   "confidence": 0-100,
-  "m15_signal_visual_check": "チャート上で視覚的に確認できたヒゲの長さやローソク足の形状、描画ゾーンとの位置関係を簡潔に説明",
+  "m15_signal_visual_check": "スイープレベル付近のローソク足の形状・ヒゲの長さ・描画ゾーンとの位置関係を簡潔に説明",
   "reasoning": "最終判断の理由"
 }}
 必ずJSON形式のみで回答してください。"""

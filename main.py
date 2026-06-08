@@ -1147,16 +1147,23 @@ def _check_entry(symbol: str):
     if lot_multiplier < 1.0:
         scaled_lot = lot_calculator.apply_multiplier(symbol, lot, lot_multiplier)
         if scaled_lot is None:
+            # lot が既に vol_min の場合、倍率をかけると vol_min 未満になる。
+            # この状態でスキップし続けると consume_post_recovery_trade() が
+            # 一切呼ばれずカウンタが減らない（無限スキップループ）。
+            # lot は既に最小値なので慎重モードは十分適用済みとみなし、
+            # vol_min のまま発注を続行してカウンタを消費する。
             logger.warning(
-                "[Entry] %s: 復帰後ロット縮小で最小ロット未満 → スキップ (元lot=%.4f × %.1f)",
+                "[Entry] %s: 復帰後ロット縮小不可 (lot=%.4f が既にvol_min) "
+                "→ vol_min のまま続行してカウンタを消費 (x%.1f 適用不可)",
                 symbol, lot, lot_multiplier,
             )
-            return
-        logger.info(
-            "[Entry] %s: 復帰後慎重モード ロット縮小 %.4f → %.4f (x%.1f)",
-            symbol, lot, scaled_lot, lot_multiplier,
-        )
-        lot = scaled_lot
+            # lot はそのまま (vol_min)
+        else:
+            logger.info(
+                "[Entry] %s: 復帰後慎重モード ロット縮小 %.4f → %.4f (x%.1f)",
+                symbol, lot, scaled_lot, lot_multiplier,
+            )
+            lot = scaled_lot
 
     # ── Python側構造TP計算 (AI tp_distanceは比較参照のみ、Python構造レベル優先) ──
     min_tp_distance = sl_distance * config.ENTRY_MIN_TP_R
