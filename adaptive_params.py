@@ -110,14 +110,25 @@ def _extract_json(text: str) -> dict | None:
 def _is_llm_due(last_iso: str | None) -> bool:
     if not config.ADAPTIVE_LLM_ENABLED:
         return False
+
+    now = datetime.utcnow()
+
+    # 土曜(5) または 日曜(6) のみ実行を許可
+    # weekday(): 0=月, 1=火, 2=水, 3=木, 4=金, 5=土, 6=日
+    if now.weekday() not in (5, 6):
+        return False
+
+    # 初回 (DBにレコードなし) は即実行
     if not last_iso:
         return True
     try:
         last_dt = datetime.fromisoformat(last_iso)
     except ValueError:
         return True
-    elapsed = (datetime.utcnow() - last_dt).total_seconds()
-    return elapsed >= config.ADAPTIVE_LLM_INTERVAL_SEC
+
+    # 前回実行から最低6日経過していること (同じ週末に2回実行されないための制限)
+    elapsed = (now - last_dt).total_seconds()
+    return elapsed >= 6 * 24 * 3600
 
 
 def _build_bucket_stats(rows: list[dict]) -> dict[str, dict]:

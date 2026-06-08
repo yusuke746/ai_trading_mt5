@@ -33,16 +33,19 @@ def _send(content: str, embeds: list[dict] | None = None):
 
 # ── 通知種別 ────────────────────────────
 
-def send_heartbeat(balance: float, equity: float, open_positions: int):
+def send_heartbeat(balance: float, equity: float, open_positions: int,
+                   drawdown_pct: float = 0.0):
+    """異常時のみ呼び出されるハートビートアラート"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     embed = {
-        "title": "💓 Heartbeat",
-        "color": 0x00FF00,
+        "title": "⚠️ Heartbeat Alert",
+        "color": 0xFF6600,
         "fields": [
             {"name": "時刻", "value": now, "inline": True},
             {"name": "残高", "value": f"¥{balance:,.0f}", "inline": True},
             {"name": "有効証拠金", "value": f"¥{equity:,.0f}", "inline": True},
             {"name": "保有ポジション", "value": str(open_positions), "inline": True},
+            {"name": "浮動損益 (DD%)", "value": f"-{drawdown_pct:.1f}%", "inline": True},
         ],
     }
     _send("", embeds=[embed])

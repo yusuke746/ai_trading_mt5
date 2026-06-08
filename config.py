@@ -313,6 +313,7 @@ SMC_DRAW_MAX_SWING_PER_SIDE = max(1, int(os.getenv("SMC_DRAW_MAX_SWING_PER_SIDE"
 # ループ間隔
 # ──────────────────────────────────────
 HEARTBEAT_INTERVAL_SEC = 3600     # Heartbeat: 1時間
+HEARTBEAT_NOTIFY_DRAWDOWN_PCT = float(os.getenv("HEARTBEAT_NOTIFY_DRAWDOWN_PCT", "5.0"))  # 浮動損がbalanceの何%以上でDiscord通知
 MAIN_LOOP_SLEEP_SEC = 10          # メインループスリープ
 CANDLE_WAIT_SEC = 15              # 足確定後の待ち時間
 

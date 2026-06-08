@@ -1940,26 +1940,38 @@ def _execute_exit(pos: dict, reasoning: str, action_type: str):
 # ── Heartbeat ──────────────────────────
 
 def _send_heartbeat():
-    """1時間ごとのHeartbeat通知"""
+    """1時間ごとのHeartbeat (通常時はDiscord通知なし・異常時のみ通知)"""
     account = mt5_connector.get_account_info()
     if account is None:
         discord_notifier.send_error("Heartbeat失敗", "アカウント情報取得不可")
         return
 
     positions = mt5_connector.get_positions()
-    discord_notifier.send_heartbeat(
-        balance=account["balance"],
-        equity=account["equity"],
-        open_positions=len(positions),
-    )
+    balance = account["balance"]
+    equity = account["equity"]
+    n_pos = len(positions)
+
+    # 異常判定: 浮動損が残高の閾値%以上の場合のみDiscord通知
+    drawdown_pct = (balance - equity) / balance * 100.0 if balance > 0 else 0.0
+    is_anomaly = drawdown_pct >= config.HEARTBEAT_NOTIFY_DRAWDOWN_PCT
+
+    if is_anomaly:
+        discord_notifier.send_heartbeat(
+            balance=balance,
+            equity=equity,
+            open_positions=n_pos,
+            drawdown_pct=drawdown_pct,
+        )
+
     trade_logger.insert_heartbeat(
         "OK",
-        f"balance={account['balance']:.0f} equity={account['equity']:.0f} "
-        f"positions={len(positions)}",
+        f"balance={balance:.0f} equity={equity:.0f} "
+        f"positions={n_pos} drawdown={drawdown_pct:.1f}%",
     )
     logger.info(
-        "[Heartbeat] balance=%.0f equity=%.0f positions=%d",
-        account["balance"], account["equity"], len(positions),
+        "[Heartbeat] balance=%.0f equity=%.0f positions=%d drawdown=%.1f%%%s",
+        balance, equity, n_pos, drawdown_pct,
+        " [ALERT sent]" if is_anomaly else "",
     )
 
 
