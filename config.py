@@ -166,6 +166,9 @@ EXIT_TP_NEAR_ENABLED = os.getenv("EXIT_TP_NEAR_ENABLED", "true").lower() == "tru
 # TPまでの残距離 <= max(ATR * この倍率, 1R * この倍率) なら「目前」
 EXIT_TP_NEAR_ATR_MULT = float(os.getenv("EXIT_TP_NEAR_ATR_MULT", "0.25"))
 EXIT_TP_NEAR_R_MULT = float(os.getenv("EXIT_TP_NEAR_R_MULT", "0.15"))
+# 長時間停滞タイムアウト時、MA20トレンドがポジション方向と一致している場合は
+# 強制クローズせずSLをブレイクイーブン(エントリー価格)に移動して継続する
+LONG_HOLD_TIMEOUT_BE_ENABLED = os.getenv("LONG_HOLD_TIMEOUT_BE_ENABLED", "true").lower() == "true"
 
 # ──────────────────────────────────────
 # SMC (Smart Money Concepts) フィルタ設定

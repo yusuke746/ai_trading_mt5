@@ -1709,17 +1709,70 @@ def _evaluate_mechanical_exit(
                     "EXIT_TP_NEAR_REVERSAL_MECH",
                 )
 
-    # 4) 長時間停滞タイムアウト: 400分超 + TP進捗 < 40% → 機械EXIT
+    # 4) 長時間停滞タイムアウト: 400分超 + TP進捗 < 40%
+    #    MA20トレンドがポジション方向と一致 → SLをBE(エントリー価格)に移動してリスクゼロ化し継続
+    #    トレンド不一致 → 機械EXIT
     if hold_minutes >= 400 and tp_price is not None:
         _entry_p = float(pos.get("price_open") or 0)
         if _entry_p != 0 and tp_price != _entry_p:
             _tp_prog = min(100.0, abs(current_price - _entry_p) / abs(tp_price - _entry_p) * 100.0)
             if _tp_prog < 40.0:
-                return (
-                    True,
-                    f"長時間停滞タイムアウト: hold={hold_minutes}min, tp_prog={_tp_prog:.0f}%, entry={_entry_p:.5f}, tp={tp_price:.5f}",
-                    "EXIT_LONG_HOLD_TIMEOUT_MECH",
-                )
+                # トレンド方向をMA20で確認 (LONG_HOLD_TIMEOUT_BE_ENABLED=true の場合のみ)
+                _trend_aligned = False
+                if config.LONG_HOLD_TIMEOUT_BE_ENABLED:
+                    _df_be = mt5_connector.get_rates(
+                        symbol, config.EXIT_MONITOR_TF, max(config.MA_PERIOD + 5, 30)
+                    )
+                    if _df_be is not None and len(_df_be) >= config.MA_PERIOD + 3:
+                        _ma_be = mt5_connector.calculate_ma(_df_be, config.MA_PERIOD)
+                        _ma_cur = float(_ma_be.iloc[-2])
+                        _ma_prev = float(_ma_be.iloc[-3])
+                        _trend_aligned = (
+                            (direction == "BUY" and _ma_cur > _ma_prev)
+                            or (direction == "SELL" and _ma_cur < _ma_prev)
+                        )
+
+                if _trend_aligned:
+                    # SLをBE(エントリー価格)に移動してリスクゼロ化し継続
+                    _sym_info = mt5_connector.get_symbol_info(symbol)
+                    _digits = _sym_info["digits"] if _sym_info else 5
+                    _be_sl = round(_entry_p, _digits)
+                    _current_sl = float(pos.get("sl") or 0.0)
+                    if _is_better_sl(direction, _current_sl, _be_sl):
+                        if mt5_connector.modify_position_sl(pos["ticket"], _be_sl):
+                            if trade:
+                                trade_logger.update_trade_sl_by_ticket(pos["ticket"], _be_sl)
+                            logger.info(
+                                "[Exit] %s ticket=%s: タイムアウト条件だがMA20トレンド一致 → SLをBE(%.5f)に移動して継続 (hold=%dmin, tp_prog=%.0f%%)",
+                                symbol, pos["ticket"], _be_sl, hold_minutes, _tp_prog,
+                            )
+                            discord_notifier.send_skip(
+                                symbol,
+                                f"[タイムアウトBE継続] hold={hold_minutes}min tp_prog={_tp_prog:.0f}% → SL={_be_sl:.5f}(BE)に移動して継続",
+                                notify=False,
+                            )
+                        else:
+                            logger.warning(
+                                "[Exit] %s ticket=%s: タイムアウトBE移動失敗 → 強制クローズ (hold=%dmin)",
+                                symbol, pos["ticket"], hold_minutes,
+                            )
+                            return (
+                                True,
+                                f"長時間停滞タイムアウト(BE移動失敗): hold={hold_minutes}min, tp_prog={_tp_prog:.0f}%, entry={_entry_p:.5f}",
+                                "EXIT_LONG_HOLD_TIMEOUT_MECH",
+                            )
+                    else:
+                        logger.info(
+                            "[Exit] %s ticket=%s: タイムアウト条件だがMA20トレンド一致 + SL既にBE以上 → 継続 (hold=%dmin, tp_prog=%.0f%%)",
+                            symbol, pos["ticket"], hold_minutes, _tp_prog,
+                        )
+                    return False, "", ""
+                else:
+                    return (
+                        True,
+                        f"長時間停滞タイムアウト(トレンド不一致): hold={hold_minutes}min, tp_prog={_tp_prog:.0f}%, entry={_entry_p:.5f}, tp={tp_price:.5f}",
+                        "EXIT_LONG_HOLD_TIMEOUT_MECH",
+                    )
 
     return False, "", ""
 
