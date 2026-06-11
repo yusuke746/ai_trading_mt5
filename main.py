@@ -354,6 +354,7 @@ def _mechanical_smc_gate(
     ma = mt5_connector.calculate_ma(df_h1, config.MA_PERIOD)
     ma_clean = ma.dropna()
     rr_relax = max(0.5, min(1.0, config.SMC_MECHANICAL_RR_RELAX_FACTOR))
+    rr_relax_cont = max(0.5, min(1.0, config.SMC_CONTINUATION_RR_RELAX_FACTOR))
     rr_pass = False
 
     # 構造的SL距離: REVERSAL_SWEEPはswept_level外側、CONTINUATION_BOSはATR×1.5
@@ -405,7 +406,7 @@ def _mechanical_smc_gate(
                 cont_sweep_type = "LOW"
                 bos_pass = True
                 cont_sl_dist = atr_h1 * 1.2
-                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
+                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax_cont
                 targets = [v for v in levels if v > current_price]
                 rr_pass = bool(targets) and (min(targets) - current_price) >= cont_min_tp
                 return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS", None, cont_sl_dist
@@ -414,7 +415,7 @@ def _mechanical_smc_gate(
                 cont_sweep_type = "HIGH"
                 bos_pass = True
                 cont_sl_dist = atr_h1 * 1.2
-                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax
+                cont_min_tp = cont_sl_dist * config.ENTRY_MIN_TP_R * rr_relax_cont
                 targets = [v for v in levels if v < current_price]
                 rr_pass = bool(targets) and (current_price - max(targets)) >= cont_min_tp
                 return False, bos_pass, rr_pass, cont_sweep_type, "CONTINUATION_BOS", None, cont_sl_dist
@@ -1819,21 +1820,53 @@ def _manage_profit_protection(pos: dict):
         return
 
     r_multiple = profit_distance / initial_risk
-    candidate_sl = None
-    reason = ""
+    candidates: list[tuple[float, str]] = []
 
     if r_multiple >= config.LOCK_PROFIT_2_TRIGGER_R:
-        candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_2_R)
-        reason = f"lock profit {config.LOCK_PROFIT_2_R:.2f}R"
+        r_candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_2_R)
+        candidates.append((r_candidate_sl, f"lock profit {config.LOCK_PROFIT_2_R:.2f}R"))
     elif r_multiple >= config.LOCK_PROFIT_1_TRIGGER_R:
-        candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_1_R)
-        reason = f"lock profit {config.LOCK_PROFIT_1_R:.2f}R"
+        r_candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.LOCK_PROFIT_1_R)
+        candidates.append((r_candidate_sl, f"lock profit {config.LOCK_PROFIT_1_R:.2f}R"))
     elif r_multiple >= config.BREAKEVEN_R:
-        candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.BREAKEVEN_BUFFER_R)
-        reason = f"breakeven+{config.BREAKEVEN_BUFFER_R:.2f}R"
+        r_candidate_sl = _sl_from_r(pos["type"], entry_price, initial_risk, config.BREAKEVEN_BUFFER_R)
+        candidates.append((r_candidate_sl, f"breakeven+{config.BREAKEVEN_BUFFER_R:.2f}R"))
 
-    if candidate_sl is None:
+    # TP進捗に応じてSLを段階的に引き上げる
+    if config.TP_PROGRESS_LOCK_ENABLED:
+        tp_price = pos.get("tp")
+        if tp_price is not None:
+            try:
+                tp_price_f = float(tp_price)
+            except (TypeError, ValueError):
+                tp_price_f = None
+
+            if tp_price_f is not None:
+                tp_total_distance = abs(tp_price_f - entry_price)
+                if tp_total_distance > 0:
+                    tp_progress = min(1.0, max(0.0, profit_distance / tp_total_distance))
+                    # 高い進捗条件を優先
+                    tp_steps = [
+                        (config.TP_PROGRESS_90_TRIGGER, config.TP_PROGRESS_90_LOCK),
+                        (config.TP_PROGRESS_80_TRIGGER, config.TP_PROGRESS_80_LOCK),
+                        (config.TP_PROGRESS_70_TRIGGER, config.TP_PROGRESS_70_LOCK),
+                    ]
+                    for trigger, lock in tp_steps:
+                        if tp_progress >= trigger:
+                            if pos["type"] == "BUY":
+                                tp_candidate_sl = entry_price + tp_total_distance * lock
+                            else:
+                                tp_candidate_sl = entry_price - tp_total_distance * lock
+                            candidates.append((tp_candidate_sl, f"tp progress {trigger:.0%} -> lock {lock:.0%}tp"))
+                            break
+
+    if not candidates:
         return
+
+    if pos["type"] == "BUY":
+        candidate_sl, reason = max(candidates, key=lambda x: x[0])
+    else:
+        candidate_sl, reason = min(candidates, key=lambda x: x[0])
 
     sym_info = mt5_connector.get_symbol_info(symbol)
     if sym_info is None:

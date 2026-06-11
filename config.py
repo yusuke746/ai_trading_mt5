@@ -111,6 +111,15 @@ BREAKEVEN_BUFFER_R = float(os.getenv("BREAKEVEN_BUFFER_R", "0.10"))
 LOCK_PROFIT_1_TRIGGER_R = float(os.getenv("LOCK_PROFIT_1_TRIGGER_R", "1.5"))
 LOCK_PROFIT_1_R = float(os.getenv("LOCK_PROFIT_1_R", "0.50"))
 LOCK_PROFIT_2_TRIGGER_R = float(os.getenv("LOCK_PROFIT_2_TRIGGER_R", "2.0"))
+# TP進捗ベースの段階SL引き上げ
+# 例: TP到達率70%でエントリー→TPの30%地点にSLを引き上げ
+TP_PROGRESS_LOCK_ENABLED = os.getenv("TP_PROGRESS_LOCK_ENABLED", "true").lower() == "true"
+TP_PROGRESS_70_TRIGGER = float(os.getenv("TP_PROGRESS_70_TRIGGER", "0.70"))
+TP_PROGRESS_70_LOCK = float(os.getenv("TP_PROGRESS_70_LOCK", "0.30"))
+TP_PROGRESS_80_TRIGGER = float(os.getenv("TP_PROGRESS_80_TRIGGER", "0.80"))
+TP_PROGRESS_80_LOCK = float(os.getenv("TP_PROGRESS_80_LOCK", "0.40"))
+TP_PROGRESS_90_TRIGGER = float(os.getenv("TP_PROGRESS_90_TRIGGER", "0.90"))
+TP_PROGRESS_90_LOCK = float(os.getenv("TP_PROGRESS_90_LOCK", "0.50"))
 FLAT_BEFORE_MARKET_CLOSE_ENABLED = os.getenv("FLAT_BEFORE_MARKET_CLOSE_ENABLED", "true").lower() == "true"
 FLAT_BEFORE_MARKET_CLOSE_HOUR = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_HOUR", "0"))
 FLAT_BEFORE_MARKET_CLOSE_MINUTE = int(os.getenv("FLAT_BEFORE_MARKET_CLOSE_MINUTE", "0"))
@@ -142,8 +151,9 @@ ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")
 # 銘柄別の最小SL幅上書き（ATR倍率使用時のみ）
 ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
     "GOLD": 1.5,        # GOLD#: ATR×1.5を最小SL下限（ボラ大のため広め）
+    "OILCash": 1.2,     # OILCash#: ATR×0.96以下でSL_HITが頻発していたため強化
     "USDJPY": 1.0,
-    "EURUSD": 0.8,
+    "EURUSD": 1.0,      # 1pip SL_HIT防止のため0.8→1.0
 }
 # ATR倍率ベースのSL計算時の最大幅（上限キャップ: swept_levelが遠い場合のロット計算崩壊防止）
 ENTRY_MAX_SL_ATR_MULT = float(os.getenv("ENTRY_MAX_SL_ATR_MULT", "6.0"))
@@ -229,6 +239,19 @@ try:
     SMC_MECHANICAL_RR_RELAX_FACTOR = max(0.5, min(1.0, float(os.getenv("SMC_MECHANICAL_RR_RELAX_FACTOR", "0.75"))))
 except ValueError:
     SMC_MECHANICAL_RR_RELAX_FACTOR = 0.75
+
+# CONTINUATION_BOS専用のRR判定緩和係数
+# 未指定時は既存の SMC_MECHANICAL_RR_RELAX_FACTOR を継承
+try:
+    SMC_CONTINUATION_RR_RELAX_FACTOR = max(
+        0.5,
+        min(
+            1.0,
+            float(os.getenv("SMC_CONTINUATION_RR_RELAX_FACTOR", str(SMC_MECHANICAL_RR_RELAX_FACTOR))),
+        ),
+    )
+except ValueError:
+    SMC_CONTINUATION_RR_RELAX_FACTOR = SMC_MECHANICAL_RR_RELAX_FACTOR
 
 # 市場クローズ時の無駄なAI判定を防ぐため、ティックが古い銘柄は停止中とみなす
 MARKET_DATA_STALE_SEC = int(os.getenv("MARKET_DATA_STALE_SEC", "1800"))
