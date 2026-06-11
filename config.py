@@ -147,7 +147,7 @@ ENTRY_FIXED_SL_BY_SYMBOL = {
 }
 
 # ATR倍率ベースのSL計算時の最小幅（ENTRY_FIXED_SL_BY_SYMBOL で None の銘柄のみ使用）
-ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "0.8")))
+ENTRY_MIN_SL_ATR_MULT = max(0.1, float(os.getenv("ENTRY_MIN_SL_ATR_MULT", "1.0")))
 # 銘柄別の最小SL幅上書き（ATR倍率使用時のみ）
 ENTRY_MIN_SL_ATR_MULT_BY_SYMBOL = {
     "GOLD": 1.5,        # GOLD#: ATR×1.5を最小SL下限（ボラ大のため広め）
