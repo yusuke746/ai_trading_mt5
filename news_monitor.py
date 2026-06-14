@@ -424,11 +424,14 @@ def start_background_monitor() -> None:
         logger.info("[NewsMonitor] カレンダー・ニュース監視ともに無効 → スレッド起動なし")
         return
 
-    # 起動直後に1回即時取得
-    if config.NEWS_CALENDAR_ENABLED:
-        _update_calendar()
-    if config.NEWS_MONITOR_ENABLED:
-        _update_news_cache()
+    # 起動直後に1回即時取得 (土日はスキップ)
+    if datetime.now().weekday() not in (5, 6):
+        if config.NEWS_CALENDAR_ENABLED:
+            _update_calendar()
+        if config.NEWS_MONITOR_ENABLED:
+            _update_news_cache()
+    else:
+        logger.info("[NewsMonitor] 土日のため起動時即時取得をスキップ")
 
     def _loop():
         calendar_interval = config.NEWS_CALENDAR_INTERVAL_MINUTES * 60
