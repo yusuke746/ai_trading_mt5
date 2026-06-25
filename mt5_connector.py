@@ -803,6 +803,133 @@ def place_order(symbol: str, direction: str, lot: float,
     return position_ticket
 
 
+def place_limit_order(
+    symbol: str,
+    direction: str,
+    lot: float,
+    limit_price: float,
+    sl: float,
+    tp: float | None = None,
+    expiry: "datetime | None" = None,
+) -> int | None:
+    """指値注文 (BUY_LIMIT / SELL_LIMIT) を発注する。
+
+    Returns:
+        MT5 order ticket (int) on success, None on failure.
+    """
+    from datetime import datetime  # 型ヒント用 (循環import回避)
+    sym_info = mt5.symbol_info(symbol)
+    if sym_info is None:
+        logger.error("指値注文: シンボル情報なし: %s", symbol)
+        return None
+
+    trade_mode = getattr(sym_info, "trade_mode", 4)
+    if trade_mode != 4:
+        logger.warning(
+            "指値注文スキップ: %s trade_mode=%s — 市場が新規注文を受け付けていません",
+            symbol, trade_mode,
+        )
+        return None
+
+    order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
+
+    request: dict = {
+        "action":      mt5.TRADE_ACTION_PENDING,
+        "symbol":      symbol,
+        "volume":      lot,
+        "type":        order_type,
+        "price":       limit_price,
+        "sl":          sl,
+        "magic":       202604,
+        "comment":     "AI_RevLimit",
+    }
+    if tp is not None:
+        request["tp"] = tp
+
+    if expiry is not None:
+        request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+        # MT5 は UNIX タイムスタンプ (int) で受け取る
+        expiry_ts = int(expiry.timestamp()) if hasattr(expiry, "timestamp") else int(expiry)
+        request["expiration"] = expiry_ts
+    else:
+        request["type_time"] = mt5.ORDER_TIME_GTC
+
+    result = mt5.order_send(request)
+    if result is None:
+        logger.error("指値注文送信失敗 (result=None): %s %s limit=%.5f", symbol, direction, limit_price)
+        return None
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        logger.error(
+            "指値注文失敗: %s %s limit=%.5f retcode=%s comment=%s",
+            symbol, direction, limit_price, result.retcode, result.comment,
+        )
+        return None
+
+    logger.info(
+        "指値注文成功: %s %s lot=%.2f limit=%.5f order=%s",
+        symbol, direction, lot, limit_price, result.order,
+    )
+    return result.order
+
+
+def cancel_order(order_ticket: int) -> bool:
+    """未約定の保留注文をキャンセルする。"""
+    request = {
+        "action": mt5.TRADE_ACTION_REMOVE,
+        "order":  order_ticket,
+    }
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        retcode = result.retcode if result else "None"
+        comment = result.comment if result else ""
+        logger.warning(
+            "注文キャンセル失敗: ticket=%s retcode=%s %s",
+            order_ticket, retcode, comment,
+        )
+        return False
+    logger.info("注文キャンセル完了: ticket=%s", order_ticket)
+    return True
+
+
+def get_order_by_ticket(order_ticket: int) -> dict | None:
+    """保留注文をチケット番号で取得する。存在しない場合は None。"""
+    orders = mt5.orders_get(ticket=order_ticket)
+    if not orders:
+        return None
+    o = orders[0]
+    return {
+        "ticket":           o.ticket,
+        "symbol":           o.symbol,
+        "type":             o.type,
+        "volume":           o.volume_current,
+        "price_open":       o.price_open,
+        "sl":               o.sl,
+        "tp":               o.tp,
+        "time_setup":       o.time_setup,
+        "time_expiration":  o.time_expiration,
+        "state":            o.state,
+    }
+
+
+def get_position_by_identifier(identifier: int) -> dict | None:
+    """指値注文が約定して生成されたポジションを identifier (=元の order ticket) で取得する。"""
+    positions = mt5.positions_get()
+    if not positions:
+        return None
+    for pos in positions:
+        if pos.identifier == identifier:
+            return {
+                "ticket":      pos.ticket,
+                "symbol":      pos.symbol,
+                "type":        pos.type,
+                "volume":      pos.volume,
+                "price_open":  pos.price_open,
+                "sl":          pos.sl,
+                "tp":          pos.tp,
+            }
+    return None
+
+
 def close_position(ticket: int) -> bool:
     position = mt5.positions_get(ticket=ticket)
     if not position:

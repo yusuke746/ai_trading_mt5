@@ -211,6 +211,12 @@ def _trading_cycle():
     except Exception as e:
         logger.error("孤立トレード照合例外: %s", e, exc_info=True)
 
+    # 0b) 保留中の指値注文を確認 (約定済み→DB登録, 期限切れ→キャンセル)
+    try:
+        _check_pending_orders()
+    except Exception as e:
+        logger.error("指値注文確認例外: %s", e, exc_info=True)
+
     # 1) 保有ポジションのエグジットチェック
     _check_exits()
 
@@ -519,6 +525,15 @@ def _check_entry(symbol: str):
     positions = mt5_connector.get_positions(symbol)
     if positions:
         logger.info("[Entry] %s: ポジション保有中 → スキップ", symbol)
+        return
+
+    # 指値注文が保留中の場合もスキップ (REVERSAL_SWEEP 指値待ち中)
+    active_pending = trade_logger.get_active_pending_order_by_symbol(symbol)
+    if active_pending:
+        logger.info(
+            "[Entry] %s: 指値注文保留中 (ticket=%s limit=%.5f) → スキップ",
+            symbol, active_pending["order_ticket"], active_pending["limit_price"],
+        )
         return
 
     # 週末クローズ後はエントリー禁止 (ギャップリスク)
@@ -1262,6 +1277,101 @@ def _check_entry(symbol: str):
         symbol, tp_distance, tp_price, _tp_source, min_tp_distance, ideal_tp_distance,
     )
 
+    # ── REVERSAL_SWEEP: フィボナッチ指値エントリー ──────────────────────────────────
+    if mech_entry_type == "REVERSAL_SWEEP" and config.REVERSAL_SWEEP_LIMIT_ORDER_ENABLED:
+        # シグナル足 = 直前に確定した M15 ローソク (iloc[-2]: [-1]はライブ足)
+        sig_candle = df_m15.iloc[-2]
+        sig_high = float(sig_candle["high"])
+        sig_low  = float(sig_candle["low"])
+        sig_range = sig_high - sig_low
+
+        # 銘柄別フィボナッチ戻し率を取得
+        fib_pct = config.REVERSAL_SWEEP_FIB_PCT_BY_SYMBOL.get(
+            symbol_key, config.REVERSAL_SWEEP_FIB_PCT_DEFAULT
+        )
+
+        if direction == "SELL":
+            # SELL_LIMIT: シグナル足の安値 + 値幅 × fib_pct (現在価格より上に置く)
+            limit_price = round(sig_low + sig_range * fib_pct, digits)
+            sanity_ok = limit_price > price_info["bid"] and limit_price < sl_price
+        else:
+            # BUY_LIMIT: シグナル足の高値 - 値幅 × fib_pct (現在価格より下に置く)
+            limit_price = round(sig_high - sig_range * fib_pct, digits)
+            sanity_ok = limit_price < price_info["ask"] and limit_price > sl_price
+
+        if not sanity_ok:
+            # 指値価格が異常 (既に市場が動いた / SLより不利側) → 成行にフォールバックせずSKIP
+            logger.info(
+                "[Entry] %s: 指値価格(%.5f)が無効 (bid=%.5f ask=%.5f sl=%.5f dir=%s fib=%.1f%%) "
+                "→ REVERSAL_SWEEPエッジ喪失のためSKIP",
+                symbol, limit_price,
+                price_info["bid"], price_info["ask"], sl_price, direction, fib_pct * 100,
+            )
+            return
+
+        tf_minutes = _timeframe_to_minutes(config.EXECUTION_TF)
+        expiry_dt = datetime.now(UTC) + timedelta(
+            minutes=tf_minutes * config.REVERSAL_SWEEP_LIMIT_EXPIRE_BARS
+        )
+
+        order_ticket = mt5_connector.place_limit_order(
+            symbol=symbol,
+            direction=direction,
+            lot=lot,
+            limit_price=limit_price,
+            sl=sl_price,
+            tp=tp_price,
+            expiry=expiry_dt,
+        )
+        if order_ticket is None:
+            logger.error("[Entry] %s: 指値注文送信失敗 → スキップ", symbol)
+            return
+
+        # 復帰後慎重モードのカウンタを消費 (発注成立時のみ)
+        market_stress.consume_post_recovery_trade(symbol)
+
+        # DB 記録 (pending_orders テーブル)
+        smc_summary = (
+            f"[SMC] entry_type={mech_entry_type} sweep={smc_sweep_pass} "
+            f"dir={mech_sweep_type} h1_trend={h1_trend_for_chart}\n"
+            f"[MechGate] sweep={smc_sweep_pass} bos={smc_bos_pass} rr={smc_rr_pass}\n"
+            f"[Visual] {(signal.m15_signal_visual_check or '')[:200]}\n"
+        )
+        trade_logger.insert_pending_order(
+            symbol=symbol,
+            direction=direction,
+            order_ticket=order_ticket,
+            limit_price=limit_price,
+            lot_size=lot,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            expires_at=expiry_dt.isoformat(),
+            entry_type=mech_entry_type,
+            market_regime=h1_trend_for_chart,
+            fib_pct=fib_pct,
+            ai_confidence=signal.confidence,
+            ai_reasoning=(smc_summary + signal.reasoning)[:1000],
+        )
+
+        # Discord 通知
+        discord_notifier.send_limit_order(
+            symbol=symbol, direction=direction, lot=lot,
+            limit_price=limit_price, sl=sl_price, tp=tp_price,
+            fib_pct=fib_pct,
+            expires_at=expiry_dt.astimezone(_JST).strftime("%m/%d %H:%M JST"),
+            reasoning=signal.reasoning,
+        )
+
+        logger.info(
+            "[Entry] 指値注文完了: %s %s lot=%.2f limit=%.5f sl=%.5f tp=%.5f "
+            "ticket=%s fib=%.1f%% expires=%s",
+            symbol, direction, lot, limit_price, sl_price, tp_price,
+            order_ticket, fib_pct * 100,
+            expiry_dt.astimezone(_JST).strftime("%H:%M JST"),
+        )
+        return  # 指値注文を出したのでここで終了 (成行発注には進まない)
+
+    # ── 成行発注 (CONTINUATION_BOS またはフォールバック) ──────────────────────────
     # 発注
     ticket = mt5_connector.place_order(symbol, direction, lot, sl_price, tp_price)
     if ticket is None:
@@ -1306,6 +1416,112 @@ def _check_entry(symbol: str):
         "[Entry] 発注完了: %s %s lot=%.2f entry=%.5f sl=%.5f tp=%.5f ticket=%s",
         symbol, direction, lot, entry_price, sl_price, tp_price, ticket,
     )
+
+
+# ── 保留指値注文の管理 ────────────────────
+
+def _check_pending_orders():
+    """保留中の指値注文を確認し、約定済みはDBに記録、期限切れはキャンセルする。"""
+    pending_orders = trade_logger.get_active_pending_orders()
+    if not pending_orders:
+        return
+
+    now_utc = datetime.now(UTC)
+
+    for pending in pending_orders:
+        order_ticket = pending["order_ticket"]
+        symbol = pending["symbol"]
+        direction = pending["direction"]
+        pending_id = pending["id"]
+
+        # MT5 に注文が残っているか確認
+        mt5_order = mt5_connector.get_order_by_ticket(order_ticket)
+
+        if mt5_order is not None:
+            # ── 注文がまだ保留中 ──
+            expires_at_str = pending.get("expires_at")
+            if expires_at_str:
+                try:
+                    expire_dt = _as_utc(datetime.fromisoformat(expires_at_str))
+                    if expire_dt and now_utc > expire_dt:
+                        # 期限切れ → MT5からキャンセルしてDB更新
+                        cancelled = mt5_connector.cancel_order(order_ticket)
+                        if cancelled:
+                            trade_logger.update_pending_order_cancelled(pending_id, "EXPIRED")
+                            logger.info(
+                                "[PendingOrder] %s: 指値注文期限切れキャンセル ticket=%s",
+                                symbol, order_ticket,
+                            )
+                            discord_notifier.send_skip(
+                                symbol,
+                                f"[指値期限切れ] {direction} ticket={order_ticket} "
+                                f"limit={pending.get('limit_price')}",
+                                notify=True,
+                            )
+                        else:
+                            logger.warning(
+                                "[PendingOrder] %s: 期限切れキャンセル失敗 ticket=%s -> 次サイクル再試行",
+                                symbol, order_ticket,
+                            )
+                except ValueError:
+                    pass
+        else:
+            # ── MT5 に注文が存在しない → 約定済み or MT5自動キャンセル ──
+            # identifier (= 元の order_ticket) でポジションを検索
+            filled_pos = mt5_connector.get_position_by_identifier(order_ticket)
+
+            if filled_pos:
+                # 約定済み → trades テーブルにポジション情報を記録
+                position_ticket = filled_pos["ticket"]
+                actual_entry_price = filled_pos["price_open"]
+                fib_pct = pending.get("fib_pct") or 0.0
+
+                ai_reasoning = pending.get("ai_reasoning") or ""
+                trade_logger.insert_trade(
+                    symbol=symbol,
+                    direction=direction,
+                    entry_price=actual_entry_price,
+                    lot_size=pending.get("lot_size") or 0.0,
+                    sl_price=pending.get("sl_price") or 0.0,
+                    tp_price=pending.get("tp_price"),
+                    ai_reasoning=ai_reasoning[:1000],
+                    news_summary="",
+                    mt5_ticket=position_ticket,
+                    entry_type=pending.get("entry_type"),
+                    market_regime=pending.get("market_regime"),
+                    ai_confidence=pending.get("ai_confidence"),
+                    smc_sweep_pass=True,
+                    smc_bos_pass=True,
+                    smc_rr_pass=None,
+                    ai_smc_sweep=True,
+                    ai_smc_ob=True,
+                    ai_smc_fvg=False,
+                    invalidation_price=None,
+                )
+                trade_logger.update_pending_order_filled(pending_id, position_ticket)
+
+                logger.info(
+                    "[PendingOrder] %s: 指値約定確認 %s lot=%.2f entry=%.5f ticket=%s fib=%.1f%%",
+                    symbol, direction,
+                    pending.get("lot_size") or 0.0, actual_entry_price,
+                    position_ticket, fib_pct * 100,
+                )
+                discord_notifier.send_limit_filled(
+                    symbol=symbol, direction=direction,
+                    lot=pending.get("lot_size") or 0.0,
+                    entry_price=actual_entry_price,
+                    sl=pending.get("sl_price") or 0.0,
+                    tp=pending.get("tp_price") or 0.0,
+                    fib_pct=fib_pct,
+                    reasoning=f"[自動約定確認] ticket={position_ticket}",
+                )
+            else:
+                # ポジションもない → MT5が自動キャンセル (市場クローズ等)
+                trade_logger.update_pending_order_cancelled(pending_id, "AUTO_CANCELLED")
+                logger.info(
+                    "[PendingOrder] %s: 指値注文が自動キャンセル済み ticket=%s",
+                    symbol, order_ticket,
+                )
 
 
 # ── 孤立トレード照合 ───────────────────

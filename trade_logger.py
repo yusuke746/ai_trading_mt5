@@ -99,12 +99,42 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_heartbeats_timestamp ON heartbeats(timestamp);
         """)
 
+        # pending_orders テーブル (CREATE TABLE IF NOT EXISTS でスクリプト外に追加)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_orders (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                placed_at       TEXT    NOT NULL,
+                updated_at      TEXT,
+                symbol          TEXT    NOT NULL,
+                direction       TEXT    NOT NULL,
+                order_ticket    INTEGER NOT NULL,
+                limit_price     REAL    NOT NULL,
+                lot_size        REAL,
+                sl_price        REAL,
+                tp_price        REAL,
+                expires_at      TEXT,
+                status          TEXT    DEFAULT 'PENDING',
+                position_ticket INTEGER,
+                cancel_reason   TEXT,
+                entry_type      TEXT,
+                market_regime   TEXT,
+                fib_pct         REAL,
+                ai_confidence   INTEGER,
+                ai_reasoning    TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON pending_orders(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_orders_symbol ON pending_orders(symbol)"
+        )
+
         # WALサイズの無制限増加を防ぐため、定期的に自動チェックポイントを設定
         conn.execute("PRAGMA wal_autocheckpoint=1000")
         # 既存DBへのマイグレーション
         _migrate_db(conn)
     logger.info("Database initialized: %s", config.DB_PATH)
-
 
 # ── trades ──────────────────────────────
 
@@ -737,6 +767,84 @@ def _render_dashboard_html(dashboard: dict) -> str:
 </body>
 </html>
 """
+
+
+# ── pending_orders ──────────────────────────────
+
+def insert_pending_order(
+    symbol: str,
+    direction: str,
+    order_ticket: int,
+    limit_price: float,
+    lot_size: float,
+    sl_price: float,
+    tp_price: float | None,
+    expires_at: str | None,
+    entry_type: str | None = None,
+    market_regime: str | None = None,
+    fib_pct: float | None = None,
+    ai_confidence: int | None = None,
+    ai_reasoning: str | None = None,
+) -> int:
+    """指値注文をDBに登録する。status='PENDING'。"""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO pending_orders
+               (placed_at, symbol, direction, order_ticket, limit_price,
+                lot_size, sl_price, tp_price, expires_at, status,
+                entry_type, market_regime, fib_pct, ai_confidence, ai_reasoning)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)""",
+            (
+                datetime.utcnow().isoformat(),
+                symbol, direction, order_ticket, limit_price,
+                lot_size, sl_price, tp_price, expires_at,
+                entry_type, market_regime, fib_pct, ai_confidence, ai_reasoning,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_active_pending_orders() -> list[dict]:
+    """status='PENDING' の全指値注文を返す。"""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pending_orders WHERE status = 'PENDING'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_active_pending_order_by_symbol(symbol: str) -> dict | None:
+    """指定銘柄で status='PENDING' の指値注文を返す（最新1件）。"""
+    with _get_conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM pending_orders
+               WHERE symbol = ? AND status = 'PENDING'
+               ORDER BY placed_at DESC LIMIT 1""",
+            (symbol,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_pending_order_filled(pending_id: int, position_ticket: int):
+    """指値注文が約定したとき status を 'FILLED' に更新する。"""
+    with _get_conn() as conn:
+        conn.execute(
+            """UPDATE pending_orders
+               SET status = 'FILLED', position_ticket = ?, updated_at = ?
+               WHERE id = ?""",
+            (position_ticket, datetime.utcnow().isoformat(), pending_id),
+        )
+
+
+def update_pending_order_cancelled(pending_id: int, reason: str):
+    """指値注文がキャンセル/期限切れのとき status を 'CANCELLED' に更新する。"""
+    with _get_conn() as conn:
+        conn.execute(
+            """UPDATE pending_orders
+               SET status = 'CANCELLED', cancel_reason = ?, updated_at = ?
+               WHERE id = ?""",
+            (reason, datetime.utcnow().isoformat(), pending_id),
+        )
 
 
 def _render_dashboard_section(title: str, rows: list[dict]) -> str:

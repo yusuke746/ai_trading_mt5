@@ -326,6 +326,27 @@ POST_RECOVERY_TRADE_COUNT      = int(os.getenv("POST_RECOVERY_TRADE_COUNT", "1")
 POST_RECOVERY_LOT_MULTIPLIER   = float(os.getenv("POST_RECOVERY_LOT_MULTIPLIER", "0.5"))
 
 # ──────────────────────────────────────
+# REVERSAL_SWEEP フィボナッチ指値エントリー設定
+# ──────────────────────────────────────
+# True: REVERSAL_SWEEPシグナルを成行ではなく指値(Sell Limit/Buy Limit)で発注する
+REVERSAL_SWEEP_LIMIT_ORDER_ENABLED = os.getenv("REVERSAL_SWEEP_LIMIT_ORDER_ENABLED", "true").lower() == "true"
+
+# 銘柄別フィボナッチ戻し率 (シグナル足の高値〜安値の全値幅に対する割合)
+# SELL例: 指値価格 = シグナル足の安値 + (値幅 × 戻し率)
+# BUY例 : 指値価格 = シグナル足の高値 - (値幅 × 戻し率)
+REVERSAL_SWEEP_FIB_PCT_BY_SYMBOL: dict = {
+    "GOLD":      0.382,   # ボラ大のため引き付けて入る
+    "US100CASH": 0.333,   # 推進力が強く浅め
+    "OILCASH":   0.500,   # 半値戻しの習性
+    "EURUSD":    0.500,   # 流動性高くダマシ多い
+    "USDJPY":    0.382,   # ボラ高め
+}
+# 上記未定義銘柄のデフォルト戻し率
+REVERSAL_SWEEP_FIB_PCT_DEFAULT = float(os.getenv("REVERSAL_SWEEP_FIB_PCT_DEFAULT", "0.382"))
+# 指値が未約定の場合にキャンセルするM15本数 (2本=30分)
+REVERSAL_SWEEP_LIMIT_EXPIRE_BARS = max(1, int(os.getenv("REVERSAL_SWEEP_LIMIT_EXPIRE_BARS", "2")))
+
+# ──────────────────────────────────────
 # チャート画像設定
 # ──────────────────────────────────────
 CHART_BARS = 100        # 生成チャートに表示するバー数

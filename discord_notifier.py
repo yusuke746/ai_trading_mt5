@@ -69,6 +69,47 @@ def send_entry(symbol: str, direction: str, lot: float,
     _send("", embeds=[embed])
 
 
+def send_limit_order(symbol: str, direction: str, lot: float,
+                     limit_price: float, sl: float, tp: float,
+                     fib_pct: float, expires_at: str, reasoning: str):
+    """指値注文 (REVERSAL_SWEEP Fibonacci リトレースメント) の Discord 通知。"""
+    color = 0x1ABC9C if direction == "BUY" else 0x9B59B6
+    embed = {
+        "title": f"🎯 指値注文: {symbol} {direction} [{fib_pct*100:.1f}% 戻し]",
+        "color": color,
+        "fields": [
+            {"name": "ロット", "value": f"{lot:.2f}", "inline": True},
+            {"name": "指値価格", "value": str(limit_price), "inline": True},
+            {"name": "SL", "value": str(sl), "inline": True},
+            {"name": "TP", "value": str(tp), "inline": True},
+            {"name": "有効期限", "value": expires_at, "inline": True},
+            {"name": "AI判断 (抜粋)", "value": reasoning[:500]},
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _send("", embeds=[embed])
+
+
+def send_limit_filled(symbol: str, direction: str, lot: float,
+                      entry_price: float, sl: float, tp: float,
+                      fib_pct: float, reasoning: str):
+    """指値注文が約定したときの Discord 通知。"""
+    color = 0x2ECC71 if direction == "BUY" else 0xE74C3C
+    embed = {
+        "title": f"✅ 指値約定: {symbol} {direction} [{fib_pct*100:.1f}% 戻し]",
+        "color": color,
+        "fields": [
+            {"name": "ロット", "value": f"{lot:.2f}", "inline": True},
+            {"name": "約定価格", "value": str(entry_price), "inline": True},
+            {"name": "SL", "value": str(sl), "inline": True},
+            {"name": "TP", "value": str(tp), "inline": True},
+            {"name": "メモ", "value": reasoning[:500]},
+        ],
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _send("", embeds=[embed])
+
+
 def send_exit(symbol: str, direction: str, exit_price: float,
               profit: float, reasoning: str, source: str = "AI判断"):
     color = 0x2ECC71 if profit >= 0 else 0xE74C3C
